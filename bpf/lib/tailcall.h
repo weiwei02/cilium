@@ -47,22 +47,20 @@
  * The loader will only load tail calls if they are invoked at least once.
  */
 
-#define __invoke_tailcall_if_0(NAME, FUNC)    \
+#define __invoke_tailcall_if_0(NAME, FUNC, EXT_ERR)			\
 	FUNC(ctx)
-#define __invoke_tailcall_if_1(NAME, FUNC)    \
-	({				      \
-		ep_tail_call(ctx, NAME);      \
-		DROP_MISSED_TAIL_CALL;        \
+#define __invoke_tailcall_if_1(NAME, FUNC, EXT_ERR)			\
+	({								\
+		tail_call_internal(ctx, NAME, EXT_ERR);			\
 	})
-#define invoke_tailcall_if(COND, NAME, FUNC)  \
-	__eval(__invoke_tailcall_if_, COND)(NAME, FUNC)
+#define invoke_tailcall_if(COND, NAME, FUNC, EXT_ERR)			\
+	__eval(__invoke_tailcall_if_, COND)(NAME, FUNC, EXT_ERR)
 
 #define __invoke_traced_tailcall_if_0(NAME, FUNC, TRACE, EXT_ERR)	\
 	FUNC(ctx, TRACE, EXT_ERR)
 #define __invoke_traced_tailcall_if_1(NAME, FUNC, TRACE, EXT_ERR)	\
 	({								\
-		ep_tail_call(ctx, NAME);				\
-		DROP_MISSED_TAIL_CALL;					\
+		tail_call_internal(ctx, NAME, EXT_ERR);			\
 	})
 #define invoke_traced_tailcall_if(COND, NAME, FUNC, TRACE, EXT_ERR)	\
 	__eval(__invoke_traced_tailcall_if_, COND)(NAME, FUNC, TRACE,	\

@@ -67,12 +67,13 @@ func (r *gatewayReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		scopedLog.WithField(gatewayClass, gw.Spec.GatewayClassName).
 			WithError(err).
 			Error("Unable to get GatewayClass")
-		if k8serrors.IsNotFound(err) {
-			setGatewayAccepted(gw, false, "GatewayClass does not exist")
-			return r.handleReconcileErrorWithStatus(ctx, err, original, gw)
-		}
-		setGatewayAccepted(gw, false, "Unable to get GatewayClass")
-		return r.handleReconcileErrorWithStatus(ctx, err, original, gw)
+		// Doing nothing till the GatewayClass is available and matching controller name
+		return controllerruntime.Success()
+	}
+
+	if string(gwc.Spec.ControllerName) != controllerName {
+		scopedLog.Debug("GatewayClass does not have matching controller name, doing nothing")
+		return controllerruntime.Success()
 	}
 
 	httpRouteList := &gatewayv1.HTTPRouteList{}
@@ -518,7 +519,7 @@ func isValidPemFormat(b []byte) bool {
 
 func (r *gatewayReconciler) handleReconcileErrorWithStatus(ctx context.Context, reconcileErr error, original *gatewayv1.Gateway, modified *gatewayv1.Gateway) (ctrl.Result, error) {
 	if err := r.updateStatus(ctx, original, modified); err != nil {
-		return controllerruntime.Fail(fmt.Errorf("failed to update Gateway status while handling the reconcile error %w: %w", reconcileErr, err))
+		return controllerruntime.Fail(fmt.Errorf("failed to update Gateway status while handling the reconcile error: %w: %w", reconcileErr, err))
 	}
 
 	return controllerruntime.Fail(reconcileErr)

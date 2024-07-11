@@ -868,7 +868,7 @@ return false;`))
 
 		var vlanFilterMacro bytes.Buffer
 		if err := vlanFilterTmpl.Execute(&vlanFilterMacro, vlansByIfIndex); err != nil {
-			return "", fmt.Errorf("failed to execute template: %q", err)
+			return "", fmt.Errorf("failed to execute template: %w", err)
 		}
 
 		return vlanFilterMacro.String(), nil
@@ -888,7 +888,7 @@ func devMacros() (string, string, error) {
 	for _, iface := range option.Config.GetDevices() {
 		link, err := netlink.LinkByName(iface)
 		if err != nil {
-			return "", "", fmt.Errorf("failed to retrieve link %s by name: %q", iface, err)
+			return "", "", fmt.Errorf("failed to retrieve link %s by name: %w", iface, err)
 		}
 		idx := link.Attrs().Index
 		m := link.Attrs().HardwareAddr
@@ -907,7 +907,7 @@ switch (IFINDEX) { \
 __mac; })`))
 
 	if err := macByIfindexTmpl.Execute(&macByIfIndexMacro, macByIfIndex); err != nil {
-		return "", "", fmt.Errorf("failed to execute template: %q", err)
+		return "", "", fmt.Errorf("failed to execute template: %w", err)
 	}
 
 	if len(l3DevIfIndices) == 0 {
@@ -921,7 +921,7 @@ switch (ifindex) { \
 {{end}}} \
 is_l3; })`))
 		if err := isL3DevTmpl.Execute(&isL3DevMacroBuf, l3DevIfIndices); err != nil {
-			return "", "", fmt.Errorf("failed to execute template: %q", err)
+			return "", "", fmt.Errorf("failed to execute template: %w", err)
 		}
 		isL3DevMacro = isL3DevMacroBuf.String()
 	}
@@ -1006,6 +1006,7 @@ func (h *HeaderfileWriter) writeStaticData(fw io.Writer, e datapath.EndpointConf
 	}
 
 	fmt.Fprint(fw, defineMAC("NODE_MAC", e.GetNodeMAC()))
+	fmt.Fprint(fw, defineUint32("THIS_INTERFACE_IFINDEX", uint32(e.GetIfIndex())))
 
 	secID := e.GetIdentityLocked().Uint32()
 	fmt.Fprint(fw, defineUint32("SECLABEL", secID))

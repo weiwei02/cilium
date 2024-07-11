@@ -19,6 +19,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/testing/protocmp"
+	"google.golang.org/protobuf/types/known/durationpb"
 
 	"github.com/cilium/cilium/operator/pkg/model"
 	ciliumv2 "github.com/cilium/cilium/pkg/k8s/apis/cilium.io/v2"
@@ -193,14 +194,14 @@ func TestSharedIngressTranslator_getServices(t *testing.T) {
 	}
 }
 
-func TestSharedIngressTranslator_getHTTPRouteListenerProxy(t *testing.T) {
+func TestSharedIngressTranslator_getListenerProxy(t *testing.T) {
 	i := &defaultTranslator{
 		name:             "cilium-ingress",
 		namespace:        "kube-system",
 		secretsNamespace: "cilium-secrets",
 		useProxyProtocol: true,
 	}
-	res := i.getHTTPRouteListener(&model.Model{
+	res := i.getListener(&model.Model{
 		HTTP: []model.HTTPListener{
 			{
 				TLS: []model.TLSSecret{
@@ -225,14 +226,14 @@ func TestSharedIngressTranslator_getHTTPRouteListenerProxy(t *testing.T) {
 	require.Equal(t, []string{proxyProtocolType, tlsInspectorType}, listenerNames)
 }
 
-func TestSharedIngressTranslator_getHTTPRouteListener(t *testing.T) {
+func TestSharedIngressTranslator_getListener(t *testing.T) {
 	i := &defaultTranslator{
 		name:             "cilium-ingress",
 		namespace:        "kube-system",
 		secretsNamespace: "cilium-secrets",
 	}
 
-	res := i.getHTTPRouteListener(&model.Model{
+	res := i.getListener(&model.Model{
 		HTTP: []model.HTTPListener{
 			{
 				TLS: []model.TLSSecret{
@@ -741,6 +742,9 @@ func envoyRouteAction(namespace, backend, port string) *envoy_config_route_v3.Ro
 		Route: &envoy_config_route_v3.RouteAction{
 			ClusterSpecifier: &envoy_config_route_v3.RouteAction_Cluster{
 				Cluster: fmt.Sprintf("%s:%s:%s", namespace, backend, port),
+			},
+			MaxStreamDuration: &envoy_config_route_v3.RouteAction_MaxStreamDuration{
+				MaxStreamDuration: &durationpb.Duration{Seconds: 0},
 			},
 		},
 	}

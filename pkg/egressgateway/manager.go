@@ -33,6 +33,7 @@ import (
 	"github.com/cilium/cilium/pkg/maps/egressmap"
 	nodeTypes "github.com/cilium/cilium/pkg/node/types"
 	"github.com/cilium/cilium/pkg/option"
+	"github.com/cilium/cilium/pkg/sysctl"
 	"github.com/cilium/cilium/pkg/time"
 	"github.com/cilium/cilium/pkg/trigger"
 )
@@ -303,7 +304,7 @@ func (manager *Manager) getIdentityLabels(securityIdentity uint32) (labels.Label
 	identityCtx, cancel := context.WithTimeout(context.Background(), option.Config.KVstoreConnectivityTimeout)
 	defer cancel()
 	if err := manager.identityAllocator.WaitForInitialGlobalIdentities(identityCtx); err != nil {
-		return nil, fmt.Errorf("failed to wait for initial global identities: %v", err)
+		return nil, fmt.Errorf("failed to wait for initial global identities: %w", err)
 	}
 
 	identity := manager.identityAllocator.LookupIdentityByID(identityCtx, identity.NumericIdentity(securityIdentity))
@@ -456,6 +457,11 @@ func (manager *Manager) addEndpoint(endpoint *k8sTypes.CiliumEndpoint) error {
 		logfields.K8sNamespace:    endpoint.Namespace,
 		logfields.K8sUID:          endpoint.UID,
 	})
+
+	if endpoint.Identity == nil {
+		logger.Warning("Endpoint is missing identity metadata, skipping update to egress policy.")
+		return nil
+	}
 
 	if identityLabels, err = manager.getIdentityLabels(uint32(endpoint.Identity.ID)); err != nil {
 		logger.WithError(err).
@@ -619,6 +625,33 @@ func (manager *Manager) regenerateGatewayConfigs() {
 	}
 }
 
+func (manager *Manager) relaxRPFilter() error {
+	var sysSettings []sysctl.Setting
+	ifSet := make(map[string]struct{})
+
+	for _, pc := range manager.policyConfigs {
+		if !pc.gatewayConfig.localNodeConfiguredAsGateway {
+			continue
+		}
+
+		ifaceName := pc.gatewayConfig.ifaceName
+		if _, ok := ifSet[ifaceName]; !ok {
+			ifSet[ifaceName] = struct{}{}
+			sysSettings = append(sysSettings, sysctl.Setting{
+				Name:      fmt.Sprintf("net.ipv4.conf.%s.rp_filter", ifaceName),
+				Val:       "2",
+				IgnoreErr: false,
+			})
+		}
+	}
+
+	if len(sysSettings) == 0 {
+		return nil
+	}
+
+	return sysctl.ApplySettings(sysSettings)
+}
+
 func (manager *Manager) addMissingEgressRules() {
 	egressPolicies := map[egressmap.EgressPolicyKey4]egressmap.EgressPolicyVal4{}
 	manager.policyMap.IterateWithCallback(
@@ -719,6 +752,11 @@ func (manager *Manager) reconcileLocked() {
 	}
 
 	manager.regenerateGatewayConfigs()
+
+	if err := manager.relaxRPFilter(); err != nil {
+		manager.reconciliationTrigger.TriggerWithReason("retry after error")
+		return
+	}
 
 	// The order of the next 2 function calls matters, as by first adding missing policies and
 	// only then removing obsolete ones we make sure there will be no connectivity disruption

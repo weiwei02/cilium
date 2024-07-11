@@ -102,8 +102,8 @@ func WithSocketOption(tcpKeepAlive, tcpKeepIdleInSeconds, tcpKeepAliveProbeInter
 	}
 }
 
-// NewHTTPListenerWithDefaults same as NewListener but with default mutators applied.
-func NewHTTPListenerWithDefaults(name string, ciliumSecretNamespace string, tls map[model.TLSSecret][]string, mutatorFunc ...ListenerMutator) (ciliumv2.XDSResource, error) {
+// newListenerWithDefaults same as newListener but with default mutators applied.
+func newListenerWithDefaults(name string, ciliumSecretNamespace string, includeHTTPFilterchain bool, tlsSecretsToHostnames map[model.TLSSecret][]string, ptBackendsToHostnames map[string][]string, mutatorFunc ...ListenerMutator) (ciliumv2.XDSResource, error) {
 	fns := append(mutatorFunc,
 		WithSocketOption(
 			defaultTCPKeepAlive,
@@ -111,25 +111,21 @@ func NewHTTPListenerWithDefaults(name string, ciliumSecretNamespace string, tls 
 			defaultTCPKeepAliveProbeIntervalInSeconds,
 			defaultTCPKeepAliveMaxFailures),
 	)
-	return NewHTTPListener(name, ciliumSecretNamespace, tls, fns...)
+
+	return newListener(name, ciliumSecretNamespace, includeHTTPFilterchain, tlsSecretsToHostnames, ptBackendsToHostnames, fns...)
 }
 
-// NewHTTPListener creates a new Envoy listener with the given name.
-// The listener will have both secure and insecure filters.
-// Secret Discovery Service (SDS) is used to fetch the TLS certificates.
-func NewHTTPListener(name string, ciliumSecretNamespace string, tls map[model.TLSSecret][]string, mutatorFunc ...ListenerMutator) (ciliumv2.XDSResource, error) {
-	var filterChains []*envoy_config_listener.FilterChain
-
+func httpFilterChain(name string) (*envoy_config_listener.FilterChain, error) {
 	insecureHttpConnectionManagerName := fmt.Sprintf("%s-insecure", name)
 	insecureHttpConnectionManager, err := NewHTTPConnectionManager(
 		insecureHttpConnectionManagerName,
 		insecureHttpConnectionManagerName,
 		WithXffNumTrustedHops())
 	if err != nil {
-		return ciliumv2.XDSResource{}, err
+		return nil, err
 	}
 
-	filterChains = append(filterChains, &envoy_config_listener.FilterChain{
+	return &envoy_config_listener.FilterChain{
 		FilterChainMatch: &envoy_config_listener.FilterChainMatch{TransportProtocol: rawBufferTransportProtocol},
 		Filters: []*envoy_config_listener.Filter{
 			{
@@ -139,25 +135,31 @@ func NewHTTPListener(name string, ciliumSecretNamespace string, tls map[model.TL
 				},
 			},
 		},
-	})
+	}, nil
+}
 
-	orderedSecrets := maps.Keys(tls)
+func httpsFilterChains(name string, ciliumSecretNamespace string, tlsSecretsToHostnames map[model.TLSSecret][]string) ([]*envoy_config_listener.FilterChain, error) {
+	if len(tlsSecretsToHostnames) == 0 {
+		return nil, nil
+	}
+
+	var filterChains []*envoy_config_listener.FilterChain
+
+	orderedSecrets := maps.Keys(tlsSecretsToHostnames)
 	goslices.SortStableFunc(orderedSecrets, func(a, b model.TLSSecret) int { return cmp.Compare(a.Namespace+"/"+a.Name, b.Namespace+"/"+b.Name) })
 
 	for _, secret := range orderedSecrets {
-		hostNames := tls[secret]
+		hostNames := tlsSecretsToHostnames[secret]
+
 		secureHttpConnectionManagerName := fmt.Sprintf("%s-secure", name)
-		secureHttpConnectionManager, err := NewHTTPConnectionManager(
-			secureHttpConnectionManagerName,
-			secureHttpConnectionManagerName,
-			WithXffNumTrustedHops())
+		secureHttpConnectionManager, err := NewHTTPConnectionManager(secureHttpConnectionManagerName, secureHttpConnectionManagerName)
 		if err != nil {
-			return ciliumv2.XDSResource{}, err
+			return nil, err
 		}
 
 		transportSocket, err := newTransportSocket(ciliumSecretNamespace, []model.TLSSecret{secret})
 		if err != nil {
-			return ciliumv2.XDSResource{}, err
+			return nil, err
 		}
 
 		filterChains = append(filterChains, &envoy_config_listener.FilterChain{
@@ -173,6 +175,36 @@ func NewHTTPListener(name string, ciliumSecretNamespace string, tls map[model.TL
 			TransportSocket: transportSocket,
 		})
 	}
+
+	return filterChains, nil
+}
+
+// newListener creates a new Envoy listener with the given name.
+// The listener will have both secure and insecure filters.
+//
+// Secret Discovery Service (SDS) is used to fetch the TLS certificates.
+func newListener(name string, ciliumSecretNamespace string, includeHTTPFilterchain bool, tlsSecretsToHostnames map[model.TLSSecret][]string, tlsPassthroughBackendsMap map[string][]string, mutatorFunc ...ListenerMutator) (ciliumv2.XDSResource, error) {
+	filterChains := []*envoy_config_listener.FilterChain{}
+
+	if includeHTTPFilterchain {
+		httpFilterChain, err := httpFilterChain(name)
+		if err != nil {
+			return ciliumv2.XDSResource{}, err
+		}
+		filterChains = append(filterChains, httpFilterChain)
+	}
+
+	httpsFilterChains, err := httpsFilterChains(name, ciliumSecretNamespace, tlsSecretsToHostnames)
+	if err != nil {
+		return ciliumv2.XDSResource{}, fmt.Errorf("failed to create https filterchains: %w", err)
+	}
+	filterChains = append(filterChains, httpsFilterChains...)
+
+	tlsPassthroughFilterChains, err := tlsPassthroughFilterChains(tlsPassthroughBackendsMap)
+	if err != nil {
+		return ciliumv2.XDSResource{}, fmt.Errorf("failed to create tls passthrough filterchains: %w", err)
+	}
+	filterChains = append(filterChains, tlsPassthroughFilterChains...)
 
 	listener := &envoy_config_listener.Listener{
 		Name:         name,
@@ -203,28 +235,18 @@ func NewHTTPListener(name string, ciliumSecretNamespace string, tls map[model.TL
 	}, nil
 }
 
-// NewSNIListenerWithDefaults same as NewSNIListener but with default mutators applied.
-func NewSNIListenerWithDefaults(name string, backendsForHost map[string][]string, mutatorFunc ...ListenerMutator) (ciliumv2.XDSResource, error) {
-	fns := append(mutatorFunc,
-		WithSocketOption(
-			defaultTCPKeepAlive,
-			defaultTCPKeepAliveIdleTimeInSeconds,
-			defaultTCPKeepAliveProbeIntervalInSeconds,
-			defaultTCPKeepAliveMaxFailures),
-	)
-	return NewSNIListener(name, backendsForHost, fns...)
-}
+func tlsPassthroughFilterChains(ptBackendsToHostnames map[string][]string) ([]*envoy_config_listener.FilterChain, error) {
+	if len(ptBackendsToHostnames) == 0 {
+		return nil, nil
+	}
 
-// NewSNIListener creates a new Envoy listener with the given name.
-// The listener will be configured to use SNI to determine thhe backend
-func NewSNIListener(name string, backendsForHost map[string][]string, mutatorFunc ...ListenerMutator) (ciliumv2.XDSResource, error) {
 	var filterChains []*envoy_config_listener.FilterChain
 
-	orderedBackends := maps.Keys(backendsForHost)
+	orderedBackends := maps.Keys(ptBackendsToHostnames)
 	goslices.Sort(orderedBackends)
 
 	for _, backend := range orderedBackends {
-		hostNames := backendsForHost[backend]
+		hostNames := ptBackendsToHostnames[backend]
 		filterChains = append(filterChains, &envoy_config_listener.FilterChain{
 			FilterChainMatch: toFilterChainMatch(hostNames),
 			Filters: []*envoy_config_listener.Filter{
@@ -243,33 +265,7 @@ func NewSNIListener(name string, backendsForHost map[string][]string, mutatorFun
 		})
 	}
 
-	listener := &envoy_config_listener.Listener{
-		Name:         name,
-		FilterChains: filterChains,
-		ListenerFilters: []*envoy_config_listener.ListenerFilter{
-			{
-				Name: tlsInspectorType,
-				ConfigType: &envoy_config_listener.ListenerFilter_TypedConfig{
-					TypedConfig: toAny(&envoy_extensions_listener_tls_inspector_v3.TlsInspector{}),
-				},
-			},
-		},
-	}
-
-	for _, fn := range mutatorFunc {
-		listener = fn(listener)
-	}
-
-	listenerBytes, err := proto.Marshal(listener)
-	if err != nil {
-		return ciliumv2.XDSResource{}, err
-	}
-	return ciliumv2.XDSResource{
-		Any: &anypb.Any{
-			TypeUrl: envoy.ListenerTypeURL,
-			Value:   listenerBytes,
-		},
-	}, nil
+	return filterChains, nil
 }
 
 func newTransportSocket(ciliumSecretNamespace string, tls []model.TLSSecret) (*envoy_config_core_v3.TransportSocket, error) {

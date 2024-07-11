@@ -2705,6 +2705,10 @@ func init() {
           "description": "Immutable configuration (read-only)",
           "$ref": "#/definitions/ConfigurationMap"
         },
+        "ipLocalReservedPorts": {
+          "description": "Comma-separated list of IP ports should be reserved in the workload network namespace",
+          "type": "string"
+        },
         "ipam-mode": {
           "description": "Configured IPAM mode",
           "type": "string"
@@ -2929,6 +2933,10 @@ func init() {
         },
         "k8s-pod-name": {
           "description": "Kubernetes pod name",
+          "type": "string"
+        },
+        "k8s-uid": {
+          "description": "Kubernetes pod UID",
           "type": "string"
         },
         "labels": {
@@ -8546,6 +8554,10 @@ func init() {
           "description": "Immutable configuration (read-only)",
           "$ref": "#/definitions/ConfigurationMap"
         },
+        "ipLocalReservedPorts": {
+          "description": "Comma-separated list of IP ports should be reserved in the workload network namespace",
+          "type": "string"
+        },
         "ipam-mode": {
           "description": "Configured IPAM mode",
           "type": "string"
@@ -8793,6 +8805,10 @@ func init() {
         },
         "k8s-pod-name": {
           "description": "Kubernetes pod name",
+          "type": "string"
+        },
+        "k8s-uid": {
+          "description": "Kubernetes pod UID",
           "type": "string"
         },
         "labels": {

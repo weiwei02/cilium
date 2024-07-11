@@ -39,6 +39,23 @@ struct bpf_elf_map __section_maps POLICY_CALL_MAP = {
 	.pinning	= PIN_GLOBAL_NS,
 	.max_elem	= POLICY_PROG_MAP_SIZE,
 };
+
+static __always_inline __must_check int
+tail_call_policy(struct __ctx_buff *ctx, __u16 endpoint_id)
+{
+	if (__builtin_constant_p(endpoint_id)) {
+		tail_call_static(ctx, POLICY_CALL_MAP, endpoint_id);
+	} else {
+		tail_call_dynamic(ctx, &POLICY_CALL_MAP, endpoint_id);
+	}
+
+	/* When forwarding from a BPF program to some endpoint,
+	 * there are inherent races that can result in the endpoint's
+	 * policy program being unavailable (eg. if the endpoint is
+	 * terminating).
+	 */
+	return DROP_EP_NOT_READY;
+}
 #endif /* SKIP_POLICY_MAP */
 
 #ifdef ENABLE_L7_LB
@@ -51,6 +68,15 @@ struct bpf_elf_map __section_maps POLICY_EGRESSCALL_MAP = {
 	.pinning	= PIN_GLOBAL_NS,
 	.max_elem	= POLICY_PROG_MAP_SIZE,
 };
+
+static __always_inline __must_check int
+tail_call_egress_policy(struct __ctx_buff *ctx, __u16 endpoint_id)
+{
+	tail_call_dynamic(ctx, &POLICY_EGRESSCALL_MAP, endpoint_id);
+	/* same issue as for the POLICY_CALL_MAP calls */
+	return DROP_EP_NOT_READY;
+}
+
 #endif
 
 #ifdef ENABLE_BANDWIDTH_MANAGER
@@ -314,10 +340,14 @@ struct {
 #endif /* ENABLE_HIGH_SCALE_IPCACHE */
 
 #ifndef SKIP_CALLS_MAP
-static __always_inline void ep_tail_call(struct __ctx_buff *ctx __maybe_unused,
-					 const __u32 index __maybe_unused)
+static __always_inline __must_check int
+tail_call_internal(struct __ctx_buff *ctx, const __u32 index, __s8 *ext_err)
 {
 	tail_call_static(ctx, CALLS_MAP, index);
+
+	if (ext_err)
+		*ext_err = (__s8)index;
+	return DROP_MISSED_TAIL_CALL;
 }
 #endif /* SKIP_CALLS_MAP */
 #endif

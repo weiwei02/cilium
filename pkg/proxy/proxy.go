@@ -420,17 +420,19 @@ func (p *Proxy) SetProxyPort(name string, proxyType types.ProxyType, port uint16
 // ReinstallRoutingRules ensures the presence of routing rules and tables needed
 // to route packets to and from the L7 proxy.
 func (p *Proxy) ReinstallRoutingRules() error {
+	fromIngressProxy, fromEgressProxy := requireFromProxyRoutes()
+
 	if option.Config.EnableIPv4 {
 		if err := installToProxyRoutesIPv4(); err != nil {
 			return err
 		}
 
-		if !option.Config.EnableIPSec || option.Config.TunnelingEnabled() {
-			if err := removeFromProxyRoutesIPv4(); err != nil {
+		if fromIngressProxy || fromEgressProxy {
+			if err := installFromProxyRoutesIPv4(node.GetInternalIPv4Router(), defaults.HostDevice, fromIngressProxy, fromEgressProxy); err != nil {
 				return err
 			}
 		} else {
-			if err := installFromProxyRoutesIPv4(node.GetInternalIPv4Router(), defaults.HostDevice); err != nil {
+			if err := removeFromProxyRoutesIPv4(); err != nil {
 				return err
 			}
 		}
@@ -451,16 +453,16 @@ func (p *Proxy) ReinstallRoutingRules() error {
 			return err
 		}
 
-		if !option.Config.EnableIPSec || option.Config.TunnelingEnabled() {
-			if err := removeFromProxyRoutesIPv6(); err != nil {
-				return err
-			}
-		} else {
+		if fromIngressProxy || fromEgressProxy {
 			ipv6, err := getCiliumNetIPv6()
 			if err != nil {
 				return err
 			}
-			if err := installFromProxyRoutesIPv6(ipv6, defaults.HostDevice); err != nil {
+			if err := installFromProxyRoutesIPv6(ipv6, defaults.HostDevice, fromIngressProxy, fromEgressProxy); err != nil {
+				return err
+			}
+		} else {
+			if err := removeFromProxyRoutesIPv6(); err != nil {
 				return err
 			}
 		}
@@ -477,6 +479,12 @@ func (p *Proxy) ReinstallRoutingRules() error {
 	}
 
 	return nil
+}
+
+func requireFromProxyRoutes() (fromIngressProxy, fromEgressProxy bool) {
+	fromIngressProxy = (option.Config.EnableEnvoyConfig || option.Config.EnableIPSec) && !option.Config.TunnelingEnabled()
+	fromEgressProxy = option.Config.EnableIPSec && !option.Config.TunnelingEnabled()
+	return
 }
 
 // getCiliumNetIPv6 retrieves the first IPv6 address from the cilium_net device.

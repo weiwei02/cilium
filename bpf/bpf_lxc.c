@@ -86,6 +86,7 @@ static __always_inline int __per_packet_lb_svc_xlate_4(void *ctx, struct iphdr *
 	__u32 cluster_id = 0;
 	int l4_off;
 	int ret = 0;
+	const bool scope_switch = is_defined(ENABLE_NODEPORT);
 
 	has_l4_header = ipv4_has_l4_header(ip4);
 
@@ -99,7 +100,7 @@ static __always_inline int __per_packet_lb_svc_xlate_4(void *ctx, struct iphdr *
 
 	lb4_fill_key(&key, &tuple);
 
-	svc = lb4_lookup_service(&key, is_defined(ENABLE_NODEPORT), false);
+	svc = lb4_lookup_service(&key, scope_switch, false);
 	if (svc) {
 #if defined(ENABLE_L7_LB)
 		if (lb4_svc_is_l7loadbalancer(svc)) {
@@ -109,13 +110,12 @@ static __always_inline int __per_packet_lb_svc_xlate_4(void *ctx, struct iphdr *
 #endif /* ENABLE_L7_LB */
 		ret = lb4_local(get_ct_map4(&tuple), ctx, ipv4_is_fragment(ip4),
 				ETH_HLEN, l4_off, &key, &tuple, svc, &ct_state_new,
-				has_l4_header, false, &cluster_id, ext_err);
+				has_l4_header, false, scope_switch, &cluster_id, ext_err);
 
 #ifdef SERVICE_NO_BACKEND_RESPONSE
-		if (ret == DROP_NO_SERVICE) {
-			ep_tail_call(ctx, CILIUM_CALL_IPV4_NO_SERVICE);
-			return DROP_MISSED_TAIL_CALL;
-		}
+		if (ret == DROP_NO_SERVICE)
+			ret = tail_call_internal(ctx, CILIUM_CALL_IPV4_NO_SERVICE,
+						 ext_err);
 #endif
 
 		if (IS_ERR(ret))
@@ -124,8 +124,7 @@ static __always_inline int __per_packet_lb_svc_xlate_4(void *ctx, struct iphdr *
 skip_service_lookup:
 	/* Store state to be picked up on the continuation tail call. */
 	lb4_ctx_store_state(ctx, &ct_state_new, proxy_port, cluster_id);
-	ep_tail_call(ctx, CILIUM_CALL_IPV4_CT_EGRESS);
-	return DROP_MISSED_TAIL_CALL;
+	return tail_call_internal(ctx, CILIUM_CALL_IPV4_CT_EGRESS, ext_err);
 }
 #endif /* ENABLE_IPV4 */
 
@@ -140,6 +139,7 @@ static __always_inline int __per_packet_lb_svc_xlate_6(void *ctx, struct ipv6hdr
 	__u16 proxy_port = 0;
 	int l4_off;
 	int ret = 0;
+	const bool scope_switch = is_defined(ENABLE_NODEPORT);
 
 	ret = lb6_extract_tuple(ctx, ip6, ETH_HLEN, &l4_off, &tuple);
 	if (IS_ERR(ret)) {
@@ -158,7 +158,7 @@ static __always_inline int __per_packet_lb_svc_xlate_6(void *ctx, struct ipv6hdr
 	 * the CT entry for destination endpoints where we can't encode the
 	 * state in the address.
 	 */
-	svc = lb6_lookup_service(&key, is_defined(ENABLE_NODEPORT), false);
+	svc = lb6_lookup_service(&key, scope_switch, false);
 	if (svc) {
 #if defined(ENABLE_L7_LB)
 		if (lb6_svc_is_l7loadbalancer(svc)) {
@@ -167,13 +167,12 @@ static __always_inline int __per_packet_lb_svc_xlate_6(void *ctx, struct ipv6hdr
 		}
 #endif /* ENABLE_L7_LB */
 		ret = lb6_local(get_ct_map6(&tuple), ctx, ETH_HLEN, l4_off,
-				&key, &tuple, svc, &ct_state_new, false, ext_err);
+				&key, &tuple, svc, &ct_state_new, false, scope_switch, ext_err);
 
 #ifdef SERVICE_NO_BACKEND_RESPONSE
-		if (ret == DROP_NO_SERVICE) {
-			ep_tail_call(ctx, CILIUM_CALL_IPV6_NO_SERVICE);
-			return DROP_MISSED_TAIL_CALL;
-		}
+		if (ret == DROP_NO_SERVICE)
+			ret = tail_call_internal(ctx, CILIUM_CALL_IPV6_NO_SERVICE,
+						 ext_err);
 #endif
 
 		if (IS_ERR(ret))
@@ -183,8 +182,7 @@ static __always_inline int __per_packet_lb_svc_xlate_6(void *ctx, struct ipv6hdr
 skip_service_lookup:
 	/* Store state to be picked up on the continuation tail call. */
 	lb6_ctx_store_state(ctx, &ct_state_new, proxy_port);
-	ep_tail_call(ctx, CILIUM_CALL_IPV6_CT_EGRESS);
-	return DROP_MISSED_TAIL_CALL;
+	return tail_call_internal(ctx, CILIUM_CALL_IPV6_CT_EGRESS, ext_err);
 }
 #endif /* ENABLE_IPV6 */
 
@@ -212,7 +210,8 @@ select_ct_map4(struct __ctx_buff *ctx __maybe_unused, int dir __maybe_unused,
 
 #if defined ENABLE_IPV4 || defined ENABLE_IPV6
 static __always_inline int drop_for_direction(struct __ctx_buff *ctx,
-					      enum ct_dir dir, __u32 reason)
+					      enum ct_dir dir, int reason,
+					      __s8 ext_err)
 {
 	__u32 dst = 0;
 	__u32 dst_id = 0;
@@ -249,8 +248,8 @@ static __always_inline int drop_for_direction(struct __ctx_buff *ctx,
 		__throw_build_bug();
 	}
 
-	return send_drop_notify(ctx, src_label, dst, dst_id, reason,
-				CTX_ACT_DROP, m_dir);
+	return send_drop_notify_ext(ctx, src_label, dst, dst_id, reason,
+				    ext_err, CTX_ACT_DROP, m_dir);
 }
 #endif /* ENABLE_IPV4 || ENABLE_IPV6 */
 
@@ -265,6 +264,7 @@ int NAME(struct __ctx_buff *ctx)						\
 	void *data, *data_end;							\
 	int ret = CTX_ACT_OK;							\
 	struct iphdr *ip4;							\
+	__s8 ext_err = 0;							\
 	__u32 zero = 0;								\
 	void *map;								\
 										\
@@ -272,7 +272,7 @@ int NAME(struct __ctx_buff *ctx)						\
 	tuple = (struct ipv4_ct_tuple *)&ct_buffer.tuple;			\
 										\
 	if (!revalidate_data(ctx, &data, &data_end, &ip4))			\
-		return drop_for_direction(ctx, DIR, DROP_INVALID);		\
+		return drop_for_direction(ctx, DIR, DROP_INVALID, ext_err);	\
 										\
 	tuple->nexthdr = ip4->protocol;						\
 	tuple->daddr = ip4->daddr;						\
@@ -281,18 +281,20 @@ int NAME(struct __ctx_buff *ctx)						\
 										\
 	map = select_ct_map4(ctx, DIR, tuple);					\
 	if (!map)								\
-		return drop_for_direction(ctx, DIR, DROP_CT_NO_MAP_FOUND);	\
+		return drop_for_direction(ctx, DIR, DROP_CT_NO_MAP_FOUND,	\
+					  ext_err);				\
 										\
 	ct_buffer.ret = ct_lookup4(map, tuple, ctx, ip4, ct_buffer.l4_off,	\
 				   DIR, ct_state, &ct_buffer.monitor);		\
 	if (ct_buffer.ret < 0)							\
-		return drop_for_direction(ctx, DIR, ct_buffer.ret);		\
+		return drop_for_direction(ctx, DIR, ct_buffer.ret, ext_err);	\
 	if (map_update_elem(&CT_TAIL_CALL_BUFFER4, &zero, &ct_buffer, 0) < 0)	\
-		return drop_for_direction(ctx, DIR, DROP_INVALID_TC_BUFFER);	\
+		return drop_for_direction(ctx, DIR, DROP_INVALID_TC_BUFFER,	\
+					  ext_err);				\
 										\
-	ret = invoke_tailcall_if(CONDITION, TARGET_ID, TARGET_NAME);		\
+	ret = invoke_tailcall_if(CONDITION, TARGET_ID, TARGET_NAME, &ext_err);	\
 	if (IS_ERR(ret))							\
-		return drop_for_direction(ctx, DIR, ret);			\
+		return drop_for_direction(ctx, DIR, ret, ext_err);		\
 										\
 	return ret;								\
 }
@@ -308,13 +310,14 @@ int NAME(struct __ctx_buff *ctx)						\
 	struct ct_state *ct_state;						\
 	void *data, *data_end;							\
 	struct ipv6hdr *ip6;							\
+	__s8 ext_err = 0;							\
 	__u32 zero = 0;								\
 										\
 	ct_state = (struct ct_state *)&ct_buffer.ct_state;			\
 	tuple = (struct ipv6_ct_tuple *)&ct_buffer.tuple;			\
 										\
 	if (!revalidate_data(ctx, &data, &data_end, &ip6))			\
-		return drop_for_direction(ctx, DIR, DROP_INVALID);		\
+		return drop_for_direction(ctx, DIR, DROP_INVALID, ext_err);	\
 										\
 	tuple->nexthdr = ip6->nexthdr;						\
 	ipv6_addr_copy(&tuple->daddr, (union v6addr *)&ip6->daddr);		\
@@ -322,7 +325,7 @@ int NAME(struct __ctx_buff *ctx)						\
 										\
 	hdrlen = ipv6_hdrlen(ctx, &tuple->nexthdr);				\
 	if (hdrlen < 0)								\
-		return drop_for_direction(ctx, DIR, hdrlen);			\
+		return drop_for_direction(ctx, DIR, hdrlen, ext_err);		\
 										\
 	ct_buffer.l4_off = ETH_HLEN + hdrlen;					\
 										\
@@ -330,15 +333,15 @@ int NAME(struct __ctx_buff *ctx)						\
 				   ct_buffer.l4_off, DIR, ct_state,		\
 				   &ct_buffer.monitor);				\
 	if (ct_buffer.ret < 0)							\
-		return drop_for_direction(ctx, DIR, ct_buffer.ret);		\
+		return drop_for_direction(ctx, DIR, ct_buffer.ret, ext_err);	\
 										\
 	if (map_update_elem(&CT_TAIL_CALL_BUFFER6, &zero, &ct_buffer, 0) < 0)	\
-		return drop_for_direction(ctx, DIR,				\
-			DROP_INVALID_TC_BUFFER);				\
+		return drop_for_direction(ctx, DIR, DROP_INVALID_TC_BUFFER,	\
+					  ext_err);				\
 										\
-	ret = invoke_tailcall_if(CONDITION, TARGET_ID, TARGET_NAME);		\
+	ret = invoke_tailcall_if(CONDITION, TARGET_ID, TARGET_NAME, &ext_err);	\
 	if (IS_ERR(ret))							\
-		return drop_for_direction(ctx, DIR, ret);			\
+		return drop_for_direction(ctx, DIR, ret, ext_err);		\
 										\
 	return ret;								\
 }
@@ -526,6 +529,11 @@ ct_recreate6:
 		/* Did we end up at a stale non-service entry? Recreate if so. */
 		if (unlikely(ct_state->rev_nat_index != ct_state_new.rev_nat_index))
 			goto ct_recreate6;
+
+		/* See comment in handle_ipv4_from_lxc(). */
+		ct_state_new.proxy_redirect = proxy_port > 0;
+		if (unlikely(ct_state->proxy_redirect != ct_state_new.proxy_redirect))
+			goto ct_recreate6;
 		break;
 
 	case CT_RELATED:
@@ -542,13 +550,13 @@ ct_recreate6:
 		} else
 # endif /* ENABLE_DSR */
 		/* See comment in handle_ipv4_from_lxc(). */
-		if (ct_state->node_port) {
+		if (ct_state->node_port && lb_is_svc_proto(tuple->nexthdr)) {
 			send_trace_notify(ctx, TRACE_TO_NETWORK, SECLABEL_IPV6,
 					  *dst_sec_identity, 0, 0,
 					  trace.reason, trace.monitor);
 			ctx->tc_index |= TC_INDEX_F_SKIP_RECIRCULATION;
-			ep_tail_call(ctx, CILIUM_CALL_IPV6_NODEPORT_REVNAT);
-			return DROP_MISSED_TAIL_CALL;
+			return tail_call_internal(ctx, CILIUM_CALL_IPV6_NODEPORT_REVNAT,
+						  ext_err);
 		}
 #endif /* ENABLE_NODEPORT */
 		break;
@@ -572,8 +580,8 @@ ct_recreate6:
 			if (sid) {
 				/* If there's a policy, tailcall to the H.Encaps logic */
 				srv6_store_meta_sid(ctx, sid);
-				ep_tail_call(ctx, CILIUM_CALL_SRV6_ENCAP);
-				return DROP_MISSED_TAIL_CALL;
+				return tail_call_internal(ctx, CILIUM_CALL_SRV6_ENCAP,
+							  ext_err);
 			}
 		}
 	}
@@ -596,7 +604,9 @@ ct_recreate6:
 	 */
 	if (*dst_sec_identity == HOST_ID) {
 		ctx_store_meta(ctx, CB_FROM_HOST, 0);
-		tail_call_static(ctx, POLICY_CALL_MAP, HOST_EP_ID);
+		ret = tail_call_policy(ctx, HOST_EP_ID);
+
+		/* return fine-grained error: */
 		return DROP_HOST_NOT_READY;
 	}
 #endif /* ENABLE_HOST_FIREWALL && !ENABLE_ROUTING */
@@ -773,7 +783,7 @@ static __always_inline int __tail_handle_ipv6(struct __ctx_buff *ctx,
 	 * are subjected to forwarding into the container.
 	 */
 	if (unlikely(is_icmp6_ndp(ctx, ip6, ETH_HLEN)))
-		return icmp6_ndp_handle(ctx, ETH_HLEN, METRIC_EGRESS);
+		return icmp6_ndp_handle(ctx, ETH_HLEN, METRIC_EGRESS, ext_err);
 
 	if (unlikely(!is_valid_lxc_src_ip(ip6)))
 		return DROP_INVALID_SIP;
@@ -978,6 +988,20 @@ ct_recreate4:
 		/* Did we end up at a stale non-service entry? Recreate if so. */
 		if (unlikely(ct_state->rev_nat_index != ct_state_new.rev_nat_index))
 			goto ct_recreate4;
+
+		/* Recreate the CT entry if the proxy_redirect flag is stale.
+		 * Otherwise, the return packet will be erroneously redirected (or not)
+		 * This check assumes the case where non-TCP packets hit the stale
+		 * CT entry with the proxy_redirect flag, or active TCP connection
+		 * suddenly comes into the scope of an L7 policy. Recreating the entry
+		 * updates the proxy_redirect flag properly.
+		 *
+		 * if the packet hits a closing stale entry, ct_lookup returns CT_NEW and
+		 * caller recreates the entry.
+		 */
+		ct_state_new.proxy_redirect = proxy_port > 0;
+		if (unlikely(ct_state->proxy_redirect != ct_state_new.proxy_redirect))
+			goto ct_recreate4;
 		break;
 
 	case CT_RELATED:
@@ -999,14 +1023,17 @@ ct_recreate4:
 		/* This handles reply traffic for the case where the nodeport EP
 		 * is local to the node. We'll do the tail call to perform
 		 * the reverse DNAT.
+		 *
+		 * This codepath currently doesn't support revDNAT for ICMP,
+		 * so make sure that we only send TCP/UDP/SCTP down this way.
 		 */
-		if (ct_state->node_port) {
+		if (ct_state->node_port && lb_is_svc_proto(tuple->nexthdr)) {
 			send_trace_notify(ctx, TRACE_TO_NETWORK, SECLABEL_IPV4,
 					  *dst_sec_identity, 0, 0,
 					  trace.reason, trace.monitor);
 			ctx->tc_index |= TC_INDEX_F_SKIP_RECIRCULATION;
-			ep_tail_call(ctx, CILIUM_CALL_IPV4_NODEPORT_REVNAT);
-			return DROP_MISSED_TAIL_CALL;
+			return tail_call_internal(ctx, CILIUM_CALL_IPV4_NODEPORT_REVNAT,
+						  ext_err);
 		}
 
 #endif /* ENABLE_NODEPORT */
@@ -1043,8 +1070,8 @@ ct_recreate4:
 			if (sid) {
 				/* If there's a policy, tailcall to the H.Encaps logic */
 				srv6_store_meta_sid(ctx, sid);
-				ep_tail_call(ctx, CILIUM_CALL_SRV6_ENCAP);
-				return DROP_MISSED_TAIL_CALL;
+				return tail_call_internal(ctx, CILIUM_CALL_SRV6_ENCAP,
+							  ext_err);
 			}
 		}
 	}
@@ -1068,10 +1095,12 @@ ct_recreate4:
 	 * enabled, jump to the bpf_host program to enforce ingress host policies.
 	 * Note that bpf_lxc can be loaded before bpf_host, so bpf_host's policy
 	 * program may not yet be present at this time.
-	 */
+ */
 	if (*dst_sec_identity == HOST_ID) {
 		ctx_store_meta(ctx, CB_FROM_HOST, 0);
-		tail_call_static(ctx, POLICY_CALL_MAP, HOST_EP_ID);
+		ret = tail_call_policy(ctx, HOST_EP_ID);
+
+		/* report fine-grained error: */
 		return DROP_HOST_NOT_READY;
 	}
 #endif /* ENABLE_HOST_FIREWALL && !ENABLE_ROUTING */
@@ -1367,10 +1396,10 @@ static __always_inline int __tail_handle_ipv4(struct __ctx_buff *ctx,
 	}
 
 	if (IN_MULTICAST(bpf_ntohl(ip4->daddr))) {
-		if (mcast_lookup_subscriber_map(&ip4->daddr)) {
-			ep_tail_call(ctx, CILIUM_CALL_MULTICAST_EP_DELIVERY);
-			return DROP_MISSED_TAIL_CALL;
-		}
+		if (mcast_lookup_subscriber_map(&ip4->daddr))
+			return tail_call_internal(ctx,
+						  CILIUM_CALL_MULTICAST_EP_DELIVERY,
+						  ext_err);
 	}
 #endif /* ENABLE_MULTICAST */
 
@@ -1438,6 +1467,7 @@ int cil_from_container(struct __ctx_buff *ctx)
 {
 	__u16 proto;
 	__u32 sec_label = SECLABEL;
+	__s8 ext_err = 0;
 	int ret;
 
 	bpf_clear_meta(ctx);
@@ -1455,16 +1485,14 @@ int cil_from_container(struct __ctx_buff *ctx)
 #ifdef ENABLE_IPV6
 	case bpf_htons(ETH_P_IPV6):
 		edt_set_aggregate(ctx, LXC_ID);
-		ep_tail_call(ctx, CILIUM_CALL_IPV6_FROM_LXC);
-		ret = DROP_MISSED_TAIL_CALL;
+		ret = tail_call_internal(ctx, CILIUM_CALL_IPV6_FROM_LXC, &ext_err);
 		sec_label = SECLABEL_IPV6;
 		break;
 #endif /* ENABLE_IPV6 */
 #ifdef ENABLE_IPV4
 	case bpf_htons(ETH_P_IP):
 		edt_set_aggregate(ctx, LXC_ID);
-		ep_tail_call(ctx, CILIUM_CALL_IPV4_FROM_LXC);
-		ret = DROP_MISSED_TAIL_CALL;
+		ret = tail_call_internal(ctx, CILIUM_CALL_IPV4_FROM_LXC, &ext_err);
 		sec_label = SECLABEL_IPV4;
 		break;
 #ifdef ENABLE_ARP_PASSTHROUGH
@@ -1473,8 +1501,7 @@ int cil_from_container(struct __ctx_buff *ctx)
 		break;
 #elif defined(ENABLE_ARP_RESPONDER)
 	case bpf_htons(ETH_P_ARP):
-		ep_tail_call(ctx, CILIUM_CALL_ARP);
-		ret = DROP_MISSED_TAIL_CALL;
+		ret = tail_call_internal(ctx, CILIUM_CALL_ARP, &ext_err);
 		break;
 #endif /* ENABLE_ARP_RESPONDER */
 #endif /* ENABLE_IPV4 */
@@ -1484,8 +1511,8 @@ int cil_from_container(struct __ctx_buff *ctx)
 
 out:
 	if (IS_ERR(ret))
-		return send_drop_notify(ctx, sec_label, 0, 0, ret, CTX_ACT_DROP,
-					METRIC_EGRESS);
+		return send_drop_notify_ext(ctx, sec_label, 0, 0, ret, ext_err,
+					    CTX_ACT_DROP, METRIC_EGRESS);
 	return ret;
 }
 
@@ -1667,8 +1694,8 @@ int tail_ipv6_policy(struct __ctx_buff *ctx)
 		goto drop_err;
 	}
 
-	ret = ipv6_policy(ctx, ip6, ifindex, src_label, &tuple, &ext_err,
-			  &proxy_port);
+	ret = ipv6_policy(ctx, ip6, THIS_INTERFACE_IFINDEX, src_label, &tuple,
+			  &ext_err, &proxy_port);
 	switch (ret) {
 	case POLICY_ACT_PROXY_REDIRECT:
 		ret = ctx_redirect_to_proxy6(ctx, &tuple, proxy_port, from_host);
@@ -1771,8 +1798,8 @@ int tail_ipv6_to_endpoint(struct __ctx_buff *ctx)
 #endif
 	ctx_store_meta(ctx, CB_SRC_LABEL, 0);
 
-	ret = ipv6_policy(ctx, ip6, 0, src_sec_identity, NULL, &ext_err,
-			  &proxy_port);
+	ret = ipv6_policy(ctx, ip6, THIS_INTERFACE_IFINDEX, src_sec_identity,
+			  NULL, &ext_err, &proxy_port);
 	switch (ret) {
 	case POLICY_ACT_PROXY_REDIRECT:
 		ret = ctx_redirect_to_proxy_hairpin_ipv6(ctx, proxy_port);
@@ -1936,7 +1963,7 @@ ipv4_policy(struct __ctx_buff *ctx, struct iphdr *ip4, int ifindex, __u32 src_la
 
 		if (sep) {
 			auth_type = (__u8)*ext_err;
-			verdict = auth_lookup(ctx, SECLABEL, src_label,
+			verdict = auth_lookup(ctx, SECLABEL_IPV4, src_label,
 					      sep->tunnel_endpoint, auth_type);
 		}
 	}
@@ -1988,7 +2015,7 @@ skip_policy_enforcement:
 	}
 
 	if (*proxy_port > 0) {
-		send_trace_notify4(ctx, TRACE_TO_PROXY, src_label, SECLABEL, orig_sip,
+		send_trace_notify4(ctx, TRACE_TO_PROXY, src_label, SECLABEL_IPV4, orig_sip,
 				   bpf_ntohs(*proxy_port), ifindex, trace.reason,
 				   trace.monitor);
 		if (tuple_out)
@@ -2031,8 +2058,8 @@ int tail_ipv4_policy(struct __ctx_buff *ctx)
 		goto drop_err;
 	}
 
-	ret = ipv4_policy(ctx, ip4, ifindex, src_label, &tuple, &ext_err,
-			  &proxy_port, from_tunnel);
+	ret = ipv4_policy(ctx, ip4, THIS_INTERFACE_IFINDEX, src_label, &tuple,
+			  &ext_err, &proxy_port, from_tunnel);
 	switch (ret) {
 	case POLICY_ACT_PROXY_REDIRECT:
 		ret = ctx_redirect_to_proxy4(ctx, &tuple, proxy_port, from_host);
@@ -2224,8 +2251,8 @@ int tail_ipv4_to_endpoint(struct __ctx_buff *ctx)
 		goto out;
 	}
 
-	ret = ipv4_policy(ctx, ip4, 0, src_sec_identity, NULL, &ext_err,
-			  &proxy_port, false);
+	ret = ipv4_policy(ctx, ip4, THIS_INTERFACE_IFINDEX, src_sec_identity,
+			  NULL, &ext_err, &proxy_port, false);
 	switch (ret) {
 	case POLICY_ACT_PROXY_REDIRECT:
 		if (!revalidate_data(ctx, &data, &data_end, &ip4)) {
@@ -2289,6 +2316,7 @@ int handle_policy(struct __ctx_buff *ctx)
 {
 	__u32 src_label = ctx_load_meta(ctx, CB_SRC_LABEL);
 	__u32 sec_label = SECLABEL;
+	__s8 ext_err = 0;
 	__u16 proto;
 	int ret;
 
@@ -2302,7 +2330,7 @@ int handle_policy(struct __ctx_buff *ctx)
 	case bpf_htons(ETH_P_IPV6):
 		ret = invoke_tailcall_if(__and(is_defined(ENABLE_IPV4), is_defined(ENABLE_IPV6)),
 					 CILIUM_CALL_IPV6_CT_INGRESS_POLICY_ONLY,
-					 tail_ipv6_ct_ingress_policy_only);
+					 tail_ipv6_ct_ingress_policy_only, &ext_err);
 		sec_label = SECLABEL_IPV6;
 		break;
 #endif /* ENABLE_IPV6 */
@@ -2310,7 +2338,7 @@ int handle_policy(struct __ctx_buff *ctx)
 	case bpf_htons(ETH_P_IP):
 		ret = invoke_tailcall_if(__and(is_defined(ENABLE_IPV4), is_defined(ENABLE_IPV6)),
 					 CILIUM_CALL_IPV4_CT_INGRESS_POLICY_ONLY,
-					 tail_ipv4_ct_ingress_policy_only);
+					 tail_ipv4_ct_ingress_policy_only, &ext_err);
 		sec_label = SECLABEL_IPV4;
 		break;
 #endif /* ENABLE_IPV4 */
@@ -2321,8 +2349,8 @@ int handle_policy(struct __ctx_buff *ctx)
 
 out:
 	if (IS_ERR(ret))
-		return send_drop_notify(ctx, src_label, sec_label, LXC_ID,
-					ret, CTX_ACT_DROP, METRIC_INGRESS);
+		return send_drop_notify_ext(ctx, src_label, sec_label, LXC_ID, ret, ext_err,
+					    CTX_ACT_DROP, METRIC_INGRESS);
 
 	return ret;
 }
@@ -2341,6 +2369,7 @@ int handle_policy_egress(struct __ctx_buff *ctx)
 	__u16 proto;
 	int ret;
 	__u32 sec_label = SECLABEL;
+	__s8 ext_err = 0;
 
 	if (!validate_ethertype(ctx, &proto)) {
 		ret = DROP_UNSUPPORTED_L2;
@@ -2357,15 +2386,13 @@ int handle_policy_egress(struct __ctx_buff *ctx)
 	switch (proto) {
 #ifdef ENABLE_IPV6
 	case bpf_htons(ETH_P_IPV6):
-		ep_tail_call(ctx, CILIUM_CALL_IPV6_FROM_LXC);
-		ret = DROP_MISSED_TAIL_CALL;
+		ret = tail_call_internal(ctx, CILIUM_CALL_IPV6_FROM_LXC, &ext_err);
 		sec_label = SECLABEL_IPV6;
 		break;
 #endif /* ENABLE_IPV6 */
 #ifdef ENABLE_IPV4
 	case bpf_htons(ETH_P_IP):
-		ep_tail_call(ctx, CILIUM_CALL_IPV4_FROM_LXC);
-		ret = DROP_MISSED_TAIL_CALL;
+		ret = tail_call_internal(ctx, CILIUM_CALL_IPV4_FROM_LXC, &ext_err);
 		sec_label = SECLABEL_IPV4;
 		break;
 #endif /* ENABLE_IPV4 */
@@ -2376,8 +2403,8 @@ int handle_policy_egress(struct __ctx_buff *ctx)
 
 out:
 	if (IS_ERR(ret))
-		return send_drop_notify(ctx, sec_label, 0, 0,
-					ret, CTX_ACT_DROP, METRIC_EGRESS);
+		return send_drop_notify_ext(ctx, sec_label, 0, 0, ret, ext_err,
+					    CTX_ACT_DROP, METRIC_EGRESS);
 
 	return ret;
 }
@@ -2392,6 +2419,7 @@ int cil_to_container(struct __ctx_buff *ctx)
 	enum trace_point trace = TRACE_FROM_STACK;
 	__u32 magic, identity = 0;
 	__u32 sec_label = SECLABEL;
+	__s8 ext_err = 0;
 	__u16 proto;
 	int ret;
 
@@ -2407,10 +2435,9 @@ int cil_to_container(struct __ctx_buff *ctx)
 		trace = TRACE_FROM_PROXY;
 #if defined(ENABLE_L7_LB)
 	else if (magic == MARK_MAGIC_PROXY_EGRESS_EPID) {
-		tail_call_dynamic(ctx, &POLICY_EGRESSCALL_MAP, identity);
+		ret = tail_call_egress_policy(ctx, (__u16)identity);
 		return send_drop_notify(ctx, identity, sec_label, LXC_ID,
-					DROP_MISSED_TAIL_CALL, CTX_ACT_DROP,
-					METRIC_INGRESS);
+					ret, CTX_ACT_DROP, METRIC_INGRESS);
 	}
 #endif
 
@@ -2429,7 +2456,8 @@ int cil_to_container(struct __ctx_buff *ctx)
 	if (identity == HOST_ID) {
 		ctx_store_meta(ctx, CB_FROM_HOST, 1);
 		ctx_store_meta(ctx, CB_DST_ENDPOINT_ID, LXC_ID);
-		tail_call_static(ctx, POLICY_CALL_MAP, HOST_EP_ID);
+
+		ret = tail_call_policy(ctx, HOST_EP_ID);
 		return send_drop_notify(ctx, identity, sec_label, LXC_ID,
 					DROP_HOST_NOT_READY, CTX_ACT_DROP,
 					METRIC_INGRESS);
@@ -2463,8 +2491,7 @@ int cil_to_container(struct __ctx_buff *ctx)
 	}
 # endif /* ENABLE_HIGH_SCALE_IPCACHE */
 		ctx_store_meta(ctx, CB_SRC_LABEL, identity);
-		ep_tail_call(ctx, CILIUM_CALL_IPV6_CT_INGRESS);
-		ret = DROP_MISSED_TAIL_CALL;
+		ret = tail_call_internal(ctx, CILIUM_CALL_IPV6_CT_INGRESS, &ext_err);
 		break;
 #endif /* ENABLE_IPV6 */
 #ifdef ENABLE_IPV4
@@ -2487,8 +2514,7 @@ int cil_to_container(struct __ctx_buff *ctx)
 	}
 # endif /* ENABLE_HIGH_SCALE_IPCACHE */
 		ctx_store_meta(ctx, CB_SRC_LABEL, identity);
-		ep_tail_call(ctx, CILIUM_CALL_IPV4_CT_INGRESS);
-		ret = DROP_MISSED_TAIL_CALL;
+		ret = tail_call_internal(ctx, CILIUM_CALL_IPV4_CT_INGRESS, &ext_err);
 		break;
 #endif /* ENABLE_IPV4 */
 	default:
@@ -2498,8 +2524,8 @@ int cil_to_container(struct __ctx_buff *ctx)
 
 out:
 	if (IS_ERR(ret))
-		return send_drop_notify(ctx, identity, sec_label, LXC_ID,
-					ret, CTX_ACT_DROP, METRIC_INGRESS);
+		return send_drop_notify_ext(ctx, identity, sec_label, LXC_ID, ret,
+					    ext_err, CTX_ACT_DROP, METRIC_INGRESS);
 
 	return ret;
 }

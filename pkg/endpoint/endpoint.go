@@ -273,6 +273,10 @@ type Endpoint struct {
 	// Immutable after Endpoint creation.
 	K8sNamespace string
 
+	// K8sUID is the Kubernetes UID of the pod. Passed directly from the CNI.
+	// Immutable after Endpoint creation.
+	K8sUID string
+
 	// pod
 	pod atomic.Pointer[slim_corev1.Pod]
 
@@ -497,7 +501,7 @@ func (e *Endpoint) waitForProxyCompletions(proxyWaitGroup *completion.WaitGroup)
 
 	err := proxyWaitGroup.Context().Err()
 	if err != nil {
-		return fmt.Errorf("context cancelled before waiting for proxy updates: %s", err)
+		return fmt.Errorf("context cancelled before waiting for proxy updates: %w", err)
 	}
 
 	start := time.Now()
@@ -505,7 +509,7 @@ func (e *Endpoint) waitForProxyCompletions(proxyWaitGroup *completion.WaitGroup)
 	e.getLogger().Debug("Waiting for proxy updates to complete...")
 	err = proxyWaitGroup.Wait()
 	if err != nil {
-		return fmt.Errorf("proxy state changes failed: %s", err)
+		return fmt.Errorf("proxy state changes failed: %w", err)
 	}
 	e.getLogger().Debug("Wait time for proxy updates: ", time.Since(start))
 
@@ -879,7 +883,7 @@ func parseBase64ToEndpoint(b []byte, ep *Endpoint) error {
 	}
 
 	if err := json.Unmarshal(jsonBytes[:n], ep); err != nil {
-		return fmt.Errorf("error unmarshaling serializableEndpoint from base64 representation: %s", err)
+		return fmt.Errorf("error unmarshaling serializableEndpoint from base64 representation: %w", err)
 	}
 
 	return nil
@@ -917,7 +921,7 @@ func parseEndpoint(ctx context.Context, owner regeneration.Owner, policyGetter p
 	}
 
 	if err := parseBase64ToEndpoint(epSlice[1], &ep); err != nil {
-		return nil, fmt.Errorf("failed to parse restored endpoint: %s", err)
+		return nil, fmt.Errorf("failed to parse restored endpoint: %w", err)
 	}
 
 	ep.initDNSHistoryTrigger()
@@ -1211,7 +1215,7 @@ type DeleteConfig struct {
 // which depends on kvstore connectivity must be protected by a flag in
 // DeleteConfig and the restore logic must opt-out of it.
 func (e *Endpoint) leaveLocked(proxyWaitGroup *completion.WaitGroup, conf DeleteConfig) []error {
-	errors := []error{}
+	errs := []error{}
 
 	if !option.Config.DryMode {
 		e.owner.Datapath().Loader().Unload(e.createEpInfoCache(""))
@@ -1234,7 +1238,7 @@ func (e *Endpoint) leaveLocked(proxyWaitGroup *completion.WaitGroup, conf Delete
 
 	if e.policyMap != nil {
 		if err := e.policyMap.Close(); err != nil {
-			errors = append(errors, fmt.Errorf("unable to close policymap %s: %s", e.policyMap.String(), err))
+			errs = append(errs, fmt.Errorf("unable to close policymap %s: %w", e.policyMap.String(), err))
 		}
 	}
 
@@ -1251,7 +1255,7 @@ func (e *Endpoint) leaveLocked(proxyWaitGroup *completion.WaitGroup, conf Delete
 
 		_, err := e.allocator.Release(releaseCtx, e.SecurityIdentity, false)
 		if err != nil {
-			errors = append(errors, fmt.Errorf("unable to release identity: %s", err))
+			errs = append(errs, fmt.Errorf("unable to release identity: %w", err))
 		}
 		e.removeNetworkPolicy()
 		e.SecurityIdentity = nil
@@ -1276,7 +1280,7 @@ func (e *Endpoint) leaveLocked(proxyWaitGroup *completion.WaitGroup, conf Delete
 	endpointPolicyStatus.Remove(e.ID)
 	e.getLogger().Info("Removed endpoint")
 
-	return errors
+	return errs
 }
 
 // GetK8sNamespace returns the name of the pod if the endpoint represents a
@@ -1285,6 +1289,14 @@ func (e *Endpoint) GetK8sNamespace() string {
 	// const after creation
 	ns := e.K8sNamespace
 	return ns
+}
+
+// GetK8sUID returns the UID of the pod if the endpoint represents a Kubernetes
+// pod.
+func (e *Endpoint) GetK8sUID() string {
+	// const after creation
+	uid := e.K8sUID
+	return uid
 }
 
 // SetPod sets the pod related to this endpoint.
@@ -1685,9 +1697,15 @@ func (e *Endpoint) metadataResolver(ctx context.Context,
 
 	ns, podName := e.GetK8sNamespace(), e.GetK8sPodName()
 
-	pod, cp, identityLabels, info, _, err := resolveMetadata(ns, podName)
-	if err != nil {
+	pod, k8sMetadata, err := resolveMetadata(ns, podName)
+	switch {
+	case err != nil:
 		e.Logger(resolveLabels).WithError(err).Warning("Unable to fetch kubernetes labels")
+		fallthrough
+	case e.K8sUID != "" && e.K8sUID != string(pod.GetUID()):
+		if err == nil {
+			err = errors.New("metadata resolver: pod store out-of-date")
+		}
 		// If we were unable to fetch the k8s endpoints then
 		// we will mark the endpoint with the init identity.
 		if !restoredEndpoint {
@@ -1706,12 +1724,12 @@ func (e *Endpoint) metadataResolver(ctx context.Context,
 
 	// Merge the labels retrieved from the 'resolveMetadata' into the base
 	// labels.
-	controllerBaseLabels.MergeLabels(identityLabels)
+	controllerBaseLabels.MergeLabels(k8sMetadata.IdentityLabels)
 
 	e.SetPod(pod)
-	e.SetK8sMetadata(cp)
+	e.SetK8sMetadata(k8sMetadata.ContainerPorts)
 	e.UpdateNoTrackRules(func(_, _ string) (noTrackPort string, err error) {
-		po, _, _, _, _, err := resolveMetadata(ns, podName)
+		po, _, err := resolveMetadata(ns, podName)
 		if err != nil {
 			return "", err
 		}
@@ -1719,7 +1737,7 @@ func (e *Endpoint) metadataResolver(ctx context.Context,
 		return value, nil
 	})
 	e.UpdateVisibilityPolicy(func(_, _ string) (proxyVisibility string, err error) {
-		po, _, _, _, _, err := resolveMetadata(ns, podName)
+		po, _, err := resolveMetadata(ns, podName)
 		if err != nil {
 			return "", err
 		}
@@ -1727,11 +1745,11 @@ func (e *Endpoint) metadataResolver(ctx context.Context,
 		return value, nil
 	})
 	e.UpdateBandwidthPolicy(bwm, func(ns, podName string) (bandwidthEgress string, err error) {
-		_, _, _, _, annotations, err := resolveMetadata(ns, podName)
+		_, k8sMetadata, err := resolveMetadata(ns, podName)
 		if err != nil {
 			return "", err
 		}
-		return annotations[bandwidth.EgressBandwidth], nil
+		return k8sMetadata.Annotations[bandwidth.EgressBandwidth], nil
 	})
 
 	// If 'baseLabels' are not set then 'controllerBaseLabels' only contains
@@ -1742,14 +1760,23 @@ func (e *Endpoint) metadataResolver(ctx context.Context,
 	if len(baseLabels) != 0 {
 		source = labels.LabelSourceAny
 	}
-	regenTriggered = e.UpdateLabels(ctx, source, controllerBaseLabels, info, blocking)
+	regenTriggered = e.UpdateLabels(ctx, source, controllerBaseLabels, k8sMetadata.InfoLabels, blocking)
 
 	return regenTriggered, nil
 }
 
+// K8sMetadata is a collection of Kubernetes-related metadata that are fetched
+// from Kubernetes.
+type K8sMetadata struct {
+	ContainerPorts []slim_corev1.ContainerPort
+	IdentityLabels labels.Labels
+	InfoLabels     labels.Labels
+	Annotations    map[string]string
+}
+
 // MetadataResolverCB provides an implementation for resolving the endpoint
 // metadata for an endpoint such as the associated labels and annotations.
-type MetadataResolverCB func(ns, podName string) (pod *slim_corev1.Pod, _ []slim_corev1.ContainerPort, identityLabels labels.Labels, infoLabels labels.Labels, annotations map[string]string, err error)
+type MetadataResolverCB func(ns, podName string) (pod *slim_corev1.Pod, k8sMetadata *K8sMetadata, err error)
 
 // RunMetadataResolver starts a controller associated with the received
 // endpoint which will periodically attempt to resolve the metadata for the
@@ -2050,14 +2077,12 @@ func (e *Endpoint) runIdentityResolver(ctx context.Context, myChangeRev int, blo
 	if blocking || identity.IdentityAllocationIsLocal(newLabels) {
 		scopedLog.Info("Resolving identity labels (blocking)")
 		regenTriggered, err = e.identityLabelsChanged(ctx, myChangeRev)
-		switch err {
-		case ErrNotAlive:
-			scopedLog.Debug("not changing endpoint identity because endpoint is in process of being removed")
-			return false
-		default:
-			if err != nil {
-				scopedLog.WithError(err).Warn("Error changing endpoint identity")
+		if err != nil {
+			if errors.Is(err, ErrNotAlive) {
+				scopedLog.Debug("not changing endpoint identity because endpoint is in process of being removed")
+				return false
 			}
+			scopedLog.WithError(err).Warn("Error changing endpoint identity")
 		}
 	} else {
 		scopedLog.Info("Resolving identity labels (non-blocking)")
@@ -2069,13 +2094,11 @@ func (e *Endpoint) runIdentityResolver(ctx context.Context, myChangeRev int, blo
 			Group: resolveIdentityControllerGroup,
 			DoFunc: func(ctx context.Context) error {
 				_, err := e.identityLabelsChanged(ctx, myChangeRev)
-				switch err {
-				case ErrNotAlive:
+				if errors.Is(err, ErrNotAlive) {
 					e.getLogger().Debug("not changing endpoint identity because endpoint is in process of being removed")
 					return controller.NewExitReason("Endpoint disappeared")
-				default:
-					return err
 				}
+				return err
 			},
 			RunInterval: 5 * time.Minute,
 			Context:     e.aliveCtx,
@@ -2131,7 +2154,7 @@ func (e *Endpoint) identityLabelsChanged(ctx context.Context, myChangeRev int) (
 	notifySelectorCache := true
 	allocatedIdentity, _, err := e.allocator.AllocateIdentity(allocateCtx, newLabels, notifySelectorCache, identity.InvalidIdentity)
 	if err != nil {
-		err = fmt.Errorf("unable to resolve identity: %s", err)
+		err = fmt.Errorf("unable to resolve identity: %w", err)
 		e.LogStatus(Other, Warning, err.Error()+" (will retry)")
 		return false, err
 	}
@@ -2436,7 +2459,7 @@ func (e *Endpoint) Delete(conf DeleteConfig) []error {
 		// expected, then the rules will be left as-is because there was
 		// likely manual intervention.
 		if err := linuxrouting.Delete(e.IPv4, option.Config.EgressMultiHomeIPRuleCompat); err != nil {
-			errs = append(errs, fmt.Errorf("unable to delete endpoint routing rules: %s", err))
+			errs = append(errs, fmt.Errorf("unable to delete endpoint routing rules: %w", err))
 		}
 	}
 
@@ -2448,12 +2471,12 @@ func (e *Endpoint) Delete(conf DeleteConfig) []error {
 
 		if e.IPv4.IsValid() {
 			if err := e.owner.Datapath().RemoveNoTrackRules(e.IPv4.String(), e.noTrackPort, false); err != nil {
-				errs = append(errs, fmt.Errorf("unable to delete endpoint NOTRACK ipv4 rules: %s", err))
+				errs = append(errs, fmt.Errorf("unable to delete endpoint NOTRACK ipv4 rules: %w", err))
 			}
 		}
 		if e.IPv6.IsValid() {
 			if err := e.owner.Datapath().RemoveNoTrackRules(e.IPv6.String(), e.noTrackPort, true); err != nil {
-				errs = append(errs, fmt.Errorf("unable to delete endpoint NOTRACK ipv6 rules: %s", err))
+				errs = append(errs, fmt.Errorf("unable to delete endpoint NOTRACK ipv6 rules: %w", err))
 			}
 		}
 	}
@@ -2466,7 +2489,7 @@ func (e *Endpoint) Delete(conf DeleteConfig) []error {
 
 	err := e.waitForProxyCompletions(proxyWaitGroup)
 	if err != nil {
-		errs = append(errs, fmt.Errorf("unable to remove proxy redirects: %s", err))
+		errs = append(errs, fmt.Errorf("unable to remove proxy redirects: %w", err))
 	}
 	cancel()
 

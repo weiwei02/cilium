@@ -215,8 +215,10 @@ extraConfig: {}
 annotations: {}
 
 # -- Security Context for cilium-agent pods.
-podSecurityContext: {}
-
+podSecurityContext:
+  # -- AppArmorProfile options for the `cilium-agent` and init containers
+  appArmorProfile:
+    type: "Unconfined"
 # -- Annotations to be added to agent pods
 podAnnotations: {}
 
@@ -2066,6 +2068,10 @@ envoy:
   # -- Set Envoy upstream HTTP idle connection timeout seconds.
   # Does not apply to connections with pending requests. Default 60s
   idleTimeoutDurationSeconds: 60
+  # -- Number of trusted hops regarding the x-forwarded-for and related HTTP headers for the ingress L7 policy enforcement Envoy listeners.
+  xffNumTrustedHopsL7PolicyIngress: 0
+  # -- Number of trusted hops regarding the x-forwarded-for and related HTTP headers for the egress L7 policy enforcement Envoy listeners.
+  xffNumTrustedHopsL7PolicyEgress: 0
 
   # -- Envoy container image.
   image:
@@ -2119,8 +2125,10 @@ envoy:
   annotations: {}
 
   # -- Security Context for cilium-envoy pods.
-  podSecurityContext: {}
-
+  podSecurityContext:
+    # -- AppArmorProfile options for the `cilium-agent` and init containers
+    appArmorProfile:
+      type: "Unconfined"
   # -- Annotations to be added to envoy pods
   podAnnotations: {}
 
@@ -2741,7 +2749,11 @@ nodeinit:
 
   # -- Labels to be added to node-init pods.
   podLabels: {}
-
+  # -- Security Context for cilium-node-init pods.
+  podSecurityContext:
+    # -- AppArmorProfile options for the `cilium-node-init` and init containers
+    appArmorProfile:
+      type: "Unconfined"
   # -- nodeinit resource limits & requests
   # ref: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
   resources:
@@ -3039,9 +3051,6 @@ clustermesh:
       # NodePort will be redirected to a local backend, regardless of whether the
       # destination node belongs to the local or the remote cluster.
       nodePort: 32379
-      # -- Optional loadBalancer IP address to use with type LoadBalancer.
-      # loadBalancerIP:
-
       # -- Annotations for the clustermesh-apiserver
       # For GKE LoadBalancer, use annotation cloud.google.com/load-balancer-type: "Internal"
       # For EKS LoadBalancer, use annotation service.beta.kubernetes.io/aws-load-balancer-internal: 0.0.0.0/0
@@ -3053,6 +3062,21 @@ clustermesh:
       # -- The internalTrafficPolicy of service used for apiserver access.
       internalTrafficPolicy:
 
+      # @schema
+      # type: [null, string]
+      # @schema
+      # -- Configure a loadBalancerClass.
+      # Allows to configure the loadBalancerClass on the clustermesh-apiserver
+      # LB service in case the Service type is set to LoadBalancer
+      # (requires Kubernetes 1.24+).
+      loadBalancerClass: ~
+      # @schema
+      # type: [null, string]
+      # @schema
+      # -- Configure a specific loadBalancerIP.
+      # Allows to configure a specific loadBalancerIP on the clustermesh-apiserver
+      # LB service in case the Service type is set to LoadBalancer.
+      loadBalancerIP: ~
     # -- Number of replicas run for the clustermesh-apiserver deployment.
     replicas: 1
 
@@ -3310,7 +3334,10 @@ cgroup:
       #   memory: 128Mi
   # -- Configure cgroup root where cgroup2 filesystem is mounted on the host (see also: `cgroup.autoMount`)
   hostRoot: /run/cilium/cgroupv2
-
+# -- Configure sysctl override described in #20072.
+sysctlfix:
+  # -- Enable the sysctl override. When enabled, the init container will mount the /proc of the host so that the `sysctlfix` utility can execute.
+  enabled: true
 # -- Configure whether to enable auto detect of terminating state for endpoints
 # in order to support graceful termination.
 enableK8sTerminatingEndpoint: true

@@ -31,6 +31,10 @@ const (
 	// table which is between 253-255. See ip-route(8).
 	RouteTableInterfacesOffset = 10
 
+	// MarkProxyToWorld is the default mark to use to indicate that a packet
+	// from proxy needs to be sent to the world.
+	MarkProxyToWorld = 0x800
+
 	// RouteMarkDecrypt is the default route mark to use to indicate datapath
 	// needs to decrypt a packet.
 	RouteMarkDecrypt = 0x0D00
@@ -77,9 +81,9 @@ const (
 	// the proxy package for redirecting inbound packets to the proxy.
 	RulePriorityToProxyIngress = 9
 
-	// RulePriorityFromProxyIngress is the priority of the routing rule installed by
-	// the proxy package for redirecting inbound packets from the proxy.
-	RulePriorityFromProxyIngress = 10
+	// RulePriorityFromProxy is the priority of the routing rule installed by
+	// the proxy package for redirecting packets from the proxy.
+	RulePriorityFromProxy = 10
 
 	// RulePriorityIngress is the priority of the rule used for ingress routing
 	// of endpoints. This priority is after encryption and proxy rules, and

@@ -101,7 +101,7 @@ func (d *Daemon) validateEndpoint(ep *endpoint.Endpoint) (valid bool, err error)
 
 	if !ep.DatapathConfiguration.ExternalIpam {
 		if err := d.allocateIPsLocked(ep); err != nil {
-			return false, fmt.Errorf("Failed to re-allocate IP of endpoint: %s", err)
+			return false, fmt.Errorf("Failed to re-allocate IP of endpoint: %w", err)
 		}
 	}
 
@@ -114,7 +114,7 @@ func (d *Daemon) getPodForEndpoint(ep *endpoint.Endpoint) error {
 		err error
 	)
 	if option.Config.EnableHighScaleIPcache {
-		pod, _, _, _, _, err = d.fetchK8sMetadataForEndpoint(ep.K8sNamespace, ep.K8sPodName)
+		pod, _, err = d.fetchK8sMetadataForEndpoint(ep.K8sNamespace, ep.K8sPodName)
 	} else {
 		d.k8sWatcher.WaitForCacheSync(resources.K8sAPIGroupPodV1Core)
 		pod, err = d.k8sWatcher.GetCachedPod(ep.K8sNamespace, ep.K8sPodName)
@@ -510,7 +510,7 @@ func (d *Daemon) initRestore(restoredEndpoints *endpointRestoreState, endpointsR
 
 					err := d.clustermesh.ServicesSynced(d.ctx)
 					if err != nil {
-						log.WithError(err).Fatal("timeout while waiting for all clusters to be locally synchronized")
+						return // The parent context expired, and we are already terminating
 					}
 					log.Debug("all clusters have been correctly synchronized locally")
 				}
