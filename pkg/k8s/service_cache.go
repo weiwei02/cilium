@@ -381,6 +381,9 @@ func (s *ServiceCache) UpdateEndpoints(newEndpoints *Endpoints, swg *lock.Stoppa
 	svc, ok := s.services[esID.ServiceID]
 	endpoints, serviceReady := s.correlateEndpoints(esID.ServiceID)
 	if ok && serviceReady {
+		// copy object metadata to new correlated endpoints
+		endpoints.ObjectMeta = newEndpoints.ObjectMeta
+
 		swg.Add()
 		s.Events <- ServiceEvent{
 			Action:       UpdateService,
