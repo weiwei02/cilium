@@ -1,0 +1,57 @@
+global:
+  image:
+    repository: "registry.baidubce.com/cce-plugin-dev/cilium"
+# 从cce 机器上读取 kubeconfig
+kubeConfigPath: "/etc/kubernetes/kube-proxy.conf"
+l7Proxy: false
+kubeProxyReplacement: "true"
+
+operator:
+  # -- Enable the cilium-operator component (required).
+  enabled: true
+  resources: {}
+  # -- Remove Cilium node taint from Kubernetes nodes that have a healthy Cilium
+  # pod running.
+  removeNodeTaints: false
+  setNodeNetworkStatus: false
+  unmanagedPodWatcher:
+    # -- Restart any pod that are not managed by Cilium.
+    restart: false
+
+ipam:
+  # -- Configure IP Address Management mode.
+  # ref: https://docs.cilium.io/en/stable/network/concepts/ipam/
+  mode: "delegate"
+  ciliumNodeUpdateRate: "15s"
+  operator:
+    # -- IPv4 CIDR list range to delegate to individual nodes for IPAM.
+    clusterPoolIPv4PodCIDRList: ["10.0.0.0/8"]
+    # -- IPv4 CIDR mask size to delegate to individual nodes for IPAM.
+    clusterPoolIPv4MaskSize: 24
+    # -- IPv6 CIDR list range to delegate to individual nodes for IPAM.
+    clusterPoolIPv6PodCIDRList: ["fd00::/104"]
+    # -- IPv6 CIDR mask size to delegate to individual nodes for IPAM.
+    clusterPoolIPv6MaskSize: 120
+    # -- IP pools to auto-create in multi-pool IPAM mode.
+    autoCreateCiliumPodIPPools: {}
+nodePort:
+  # -- Enable the Cilium NodePort service implementation.
+  enabled: true
+
+  # -- Port range to use for NodePort services.
+  # range: "30000,32767"
+
+  # -- Set to true to prevent applications binding to service ports.
+  bindProtection: true
+
+# datapath config
+ipv4NativeRoutingCIDR: ""
+ipv6NativeRoutingCIDR: ""
+enableRuntimeDeviceDetection: true
+endpointRoutes:
+  # -- Enable use of per endpoint routes instead of routing via
+  # the cilium_host interface.
+  enabled: true
+bpf:
+  hostLegacyRouting: false
+  # masquerade: false
