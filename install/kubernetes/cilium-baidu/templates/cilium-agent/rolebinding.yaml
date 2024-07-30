@@ -19,6 +19,9 @@ subjects:
   - kind: ServiceAccount
     name: {{ .Values.serviceAccounts.cilium.name | quote }}
     namespace: {{ .Release.Namespace }}
+  - kind: User
+    apiGroup: rbac.authorization.k8s.io
+    name: system:kube-proxy
 {{- end}}
 
 {{- if and .Values.agent (not .Values.preflight.enabled) .Values.serviceAccounts.cilium.create .Values.ingressController.enabled .Values.ingressController.secretsNamespace.name}}
@@ -42,6 +45,9 @@ subjects:
   - kind: ServiceAccount
     name: {{ .Values.serviceAccounts.cilium.name | quote }}
     namespace: {{ .Release.Namespace }}
+  - kind: User
+    apiGroup: rbac.authorization.k8s.io
+    name: system:kube-proxy
 {{- end }}
 
 {{- if and .Values.agent (not .Values.preflight.enabled) .Values.serviceAccounts.cilium.create .Values.gatewayAPI.enabled .Values.gatewayAPI.secretsNamespace.name}}
@@ -65,6 +71,9 @@ subjects:
 - kind: ServiceAccount
   name: {{ .Values.serviceAccounts.cilium.name | quote }}
   namespace: {{ .Release.Namespace }}
+- kind: User
+  apiGroup: rbac.authorization.k8s.io
+  name: system:kube-proxy
 {{- end}}
 
 {{- if and .Values.agent (not .Values.preflight.enabled) .Values.serviceAccounts.cilium.create .Values.envoyConfig.enabled .Values.envoyConfig.secretsNamespace.name}}
@@ -88,6 +97,9 @@ subjects:
 - kind: ServiceAccount
   name: {{ .Values.serviceAccounts.cilium.name | quote }}
   namespace: {{ .Release.Namespace }}
+- kind: User
+  apiGroup: rbac.authorization.k8s.io
+  name: system:kube-proxy
 {{- end}}
 
 {{- if and .Values.agent (not .Values.preflight.enabled) .Values.serviceAccounts.cilium.create .Values.bgpControlPlane.enabled .Values.bgpControlPlane.secretsNamespace.name}}
@@ -107,4 +119,7 @@ subjects:
 - kind: ServiceAccount
   name: {{ .Values.serviceAccounts.cilium.name | quote }}
   namespace: {{ .Release.Namespace }}
+- kind: User
+  apiGroup: rbac.authorization.k8s.io
+  name: system:kube-proxy
 {{- end}}

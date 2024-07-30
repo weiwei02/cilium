@@ -1,6 +1,66 @@
 global:
   image:
     repository: "registry.baidubce.com/cce-plugin-dev/cilium"
+
+prometheus:
+  enabled: true
+  port: 9962
+image:
+  repository: "registry.baidubce.com/cce-plugin-dev/cilium/cilium"
+  tag: "1.15.6-baidu-240726"
+  useDigest: false
+certgen:
+  image:
+    repository: "registry.baidubce.com/cce-plugin-dev/cilium/certgen"
+    tag: "v0.1.13"
+    useDigest: false
+hubble:
+  relay:
+    image:
+      repository: "registry.baidubce.com/cce-plugin-dev/cilium/hubble-relay"
+      tag: "1.15.6-baidu-240726"
+      useDigest: false
+  ui:
+    backend:
+      image:
+        override: ~
+        repository: "registry.baidubce.com/cce-plugin-dev/cilium/hubble-ui-backend"
+        tag: "v0.13.1"
+        useDigest: false
+    frontend:
+      image:
+        override: ~
+        repository: "registry.baidubce.com/cce-plugin-dev/cilium/hubble-ui"
+        tag: "v0.13.1"
+        useDigest: false
+envoy:
+  image:
+    repository: "registry.baidubce.com/cce-plugin-dev/cilium/cilium-envoy"
+    tag: "v1.29.7-39a2a56bbd5b3a591f69dbca51d3e30ef97e0e51"
+    useDigest: false
+etcd:
+  image:
+    repository: "registry.baidubce.com/cce-plugin-dev/cilium/cilium-etcd-operator"
+    tag: "v2.0.7"
+    useDigest: false
+nodeinit:
+  image:
+    repository: "registry.baidubce.com/cce-plugin-dev/cilium/startup-script"
+    tag: "c54c7edeab7fde4da68e59acd319ab24af242c3f"
+    useDigest: false
+preflight:
+  image:
+    repository: "registry.baidubce.com/cce-plugin-dev/cilium/cilium"
+    tag: "1.15.6-baidu-240726"
+    useDigest: false
+clustermesh:
+  apiserver:
+    # -- Clustermesh API server image.
+    image:
+      repository: "registry.baidubce.com/cce-plugin-dev/cilium/clustermesh-apiserver"
+      tag: "1.15.6-baidu-240726"
+      useDigest: false
+  
 # 从cce 机器上读取 kubeconfig
 kubeConfigPath: "/etc/kubernetes/kube-proxy.conf"
 l7Proxy: false
@@ -17,15 +77,20 @@ operator:
   unmanagedPodWatcher:
     # -- Restart any pod that are not managed by Cilium.
     restart: false
+  image:
+    repository: "registry.baidubce.com/cce-plugin-dev/cilium/operator"
+    tag: "1.15.6-baidu-240726"
+    useDigest: false
+  replicas: 1
 
 ipam:
   # -- Configure IP Address Management mode.
   # ref: https://docs.cilium.io/en/stable/network/concepts/ipam/
-  mode: "delegate"
+  mode: "delegated-plugin"
   ciliumNodeUpdateRate: "15s"
   operator:
     # -- IPv4 CIDR list range to delegate to individual nodes for IPAM.
-    clusterPoolIPv4PodCIDRList: ["10.0.0.0/8"]
+    clusterPoolIPv4PodCIDRList: ["10.0.0.0/16"]
     # -- IPv4 CIDR mask size to delegate to individual nodes for IPAM.
     clusterPoolIPv4MaskSize: 24
     # -- IPv6 CIDR list range to delegate to individual nodes for IPAM.
@@ -45,7 +110,8 @@ nodePort:
   bindProtection: true
 
 # datapath config
-ipv4NativeRoutingCIDR: ""
+routingMode: "native"
+ipv4NativeRoutingCIDR: "10.0.0.0/16"
 ipv6NativeRoutingCIDR: ""
 enableRuntimeDeviceDetection: true
 endpointRoutes:
@@ -55,3 +121,17 @@ endpointRoutes:
 bpf:
   hostLegacyRouting: false
   # masquerade: false
+
+# health
+endpointHealthChecking:
+  # -- Enable connectivity health checking between virtual endpoints.
+  enabled: false
+
+cni:
+  # -- Install the CNI configuration and binary files into the filesystem.
+  install: false
+  chainingMode: generic-veth
+  exclusive: false
+  enableLocalNodeRoute: true
+extraConfig:
+  local-router-ipv4: 169.254.169.244

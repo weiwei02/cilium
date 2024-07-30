@@ -562,7 +562,9 @@ data:
   # to enable routing.
   enable-local-node-route: "false"
 {{- end }}
-{{- end }}
+# {{- else if .Values.cni.enableLocalNodeRoute }}
+#   enable-local-node-route: "{{ .Values.cni.enableLocalNodeRoute }}"
+# {{- end }}
 
   enable-ipv4-masquerade: {{ .Values.enableIPv4Masquerade | quote }}
   enable-ipv4-big-tcp: {{ .Values.enableIPv4BIGTCP | quote }}
