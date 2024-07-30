@@ -1148,6 +1148,8 @@ data:
 {{- end -}}
 {{- if .Values.operator.removeNodeTaints }}
   remove-cilium-node-taints: "true"
+{{- else }}
+  remove-cilium-node-taints: "false"
 {{- end }}
 {{- /* set node taints if setNodeTaints is explicitly enabled or removeNodeTaints is set */ -}}
 {{- if or .Values.operator.setNodeTaints
@@ -1157,6 +1159,8 @@ data:
 {{- end }}
 {{- if .Values.operator.setNodeNetworkStatus }}
   set-cilium-is-up-condition: "true"
+{{- else }}
+  set-cilium-is-up-condition: "false"
 {{- end }}
 
 {{- if .Values.operator.unmanagedPodWatcher.restart }}

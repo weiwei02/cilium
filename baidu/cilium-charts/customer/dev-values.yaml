@@ -7,7 +7,7 @@ prometheus:
   port: 9962
 image:
   repository: "registry.baidubce.com/cce-plugin-dev/cilium/cilium"
-  tag: "1.15.6-baidu-240726"
+  tag: "1.15.6-baidu-2407294"
   useDigest: false
 certgen:
   image:
@@ -72,6 +72,7 @@ operator:
   resources: {}
   # -- Remove Cilium node taint from Kubernetes nodes that have a healthy Cilium
   # pod running.
+  setNodeTaints: false
   removeNodeTaints: false
   setNodeNetworkStatus: false
   unmanagedPodWatcher:

@@ -48,4 +48,4 @@ kubectl -n kube-system delete deployment cilium-operator
 
 # 执行安装脚本
 # 例如 tools/operating/helm-upgrade.sh output/z85m1xdk/node-ready-values-z85m1xdk.yaml
-helm upgrade -n kube-system --install cilium install/kubernetes/cilium-baidu -f $1 
+helm upgrade -n kube-system --install cilium baidu/cilium-charts -f $1 
