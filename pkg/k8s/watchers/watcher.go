@@ -54,7 +54,6 @@ import (
 	"github.com/cilium/cilium/pkg/service"
 	"github.com/cilium/cilium/pkg/source"
 	"github.com/cilium/cilium/pkg/time"
-	corev1 "k8s.io/api/core/v1"
 )
 
 const (
@@ -641,6 +640,7 @@ func (k *K8sWatcher) k8sServiceHandler() {
 			// This requirement, however, is dropped for HighScale IPCache mode, because pod IPs are
 			// normally excluded from the ipcache regardless.
 			if !option.Config.EnableHighScaleIPcache && !svc.IsExternal() {
+				recordChangeTriggerTime(event, scopedLog)
 				return
 			}
 
@@ -664,17 +664,7 @@ func (k *K8sWatcher) k8sServiceHandler() {
 				}
 				k.policyManager.TriggerPolicyUpdates(true, "Kubernetes service endpoint added")
 			}
-
-			// Exported for each endpoints object that were part of the rules sync.
-			// See https://github.com/kubernetes/community/blob/master/sig-scalability/slos/network_programming_latency.md
-			if len(event.Endpoints.Annotations) > 0 {
-				start := getLastChangeTriggerTime(scopedLog, event.Endpoints.Annotations)
-				if !start.IsZero() {
-					latency := time.Since(start).Seconds()
-					metrics.KubernetesNetworkProgrammingLatency.Observe(latency)
-					scopedLog.WithField("elapsed", latency).Debug("Network programming")
-				}
-			}
+			recordChangeTriggerTime(event, scopedLog)
 		case k8s.DeleteService:
 			if err := k.delK8sSVCs(event.ID, event.Service, event.Endpoints); err != nil {
 				scopedLog.WithError(err).Error("Unable to delete service to implement k8s event")
@@ -708,6 +698,16 @@ func (k *K8sWatcher) k8sServiceHandler() {
 			}
 			eventHandler(event)
 		}
+	}
+}
+
+// // Exported for each endpoints object that were part of the rules sync.
+// See https://github.com/kubernetes/community/blob/master/sig-scalability/slos/network_programming_latency.md
+func recordChangeTriggerTime(event k8s.ServiceEvent, scopedLog *logrus.Entry) {
+	if !event.EndpointLastChangeTriggerTime.IsZero() {
+		latency := time.Since(event.EndpointLastChangeTriggerTime).Seconds()
+		metrics.KubernetesNetworkProgrammingLatency.Observe(latency)
+		scopedLog.WithField("elapsed", latency).Debug("Network programming")
 	}
 }
 
@@ -1057,26 +1057,4 @@ func (k *K8sWatcher) initCiliumEndpointOrSlices(ctx context.Context, asyncContro
 	} else {
 		go k.ciliumEndpointsInit(ctx, asyncControllers)
 	}
-}
-
-// getLastChangeTriggerTime returns the time.Time value of the
-// EndpointsLastChangeTriggerTime annotation stored in the given endpoints
-// object or the "zero" time if the annotation wasn't set or was set
-// incorrectly.
-func getLastChangeTriggerTime(scopedLog *logrus.Entry, annotations map[string]string) time.Time {
-	// ignore case when Endpoint is deleted.
-	if _, ok := annotations[corev1.EndpointsLastChangeTriggerTime]; !ok {
-		// It's possible that the Endpoints object won't have the
-		// EndpointsLastChangeTriggerTime annotation set. In that case return
-		// the 'zero value', which is ignored in the upstream code.
-		return time.Time{}
-	}
-	val, err := time.Parse(time.RFC3339Nano, annotations[corev1.EndpointsLastChangeTriggerTime])
-	if err != nil {
-		scopedLog.WithField("value", annotations[corev1.EndpointsLastChangeTriggerTime]).
-			WithError(err).
-			Error("Error while parsing EndpointsLastChangeTriggerTimeAnnotation")
-		// In case of error val = time.Zero, which is ignored in the upstream code.
-	}
-	return val
 }

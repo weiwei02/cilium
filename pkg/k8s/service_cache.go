@@ -8,6 +8,7 @@ import (
 	"net"
 	"slices"
 	"sync"
+	"time"
 
 	"github.com/davecgh/go-spew/spew"
 	"github.com/sirupsen/logrus"
@@ -89,6 +90,9 @@ type ServiceEvent struct {
 	// Endpoints is the endpoints structured correlated with the service
 	Endpoints *Endpoints
 
+	// EndpointLastChangeTriggerTime is the time when the endpoints were last changed
+	EndpointLastChangeTriggerTime time.Time
+
 	// OldEndpoints is old endpoints structure.
 	OldEndpoints *Endpoints
 
@@ -116,6 +120,9 @@ type ServiceCache struct {
 	// externalEndpoints is a list of additional service backends derived from source other than the local cluster
 	externalEndpoints map[ServiceID]externalEndpoints
 
+	// endpointsChangeTracker tracks the last time when endpoints were changed
+	endpointsChangeTracker *EndpointsChangeTracker
+
 	nodeAddressing types.NodeAddressing
 
 	selfNodeZoneLabel string
@@ -126,11 +133,12 @@ type ServiceCache struct {
 // NewServiceCache returns a new ServiceCache
 func NewServiceCache(nodeAddressing types.NodeAddressing) *ServiceCache {
 	return &ServiceCache{
-		services:          map[ServiceID]*Service{},
-		endpoints:         map[ServiceID]*EndpointSlices{},
-		externalEndpoints: map[ServiceID]externalEndpoints{},
-		Events:            make(chan ServiceEvent, option.Config.K8sServiceCacheSize),
-		nodeAddressing:    nodeAddressing,
+		services:               map[ServiceID]*Service{},
+		endpoints:              map[ServiceID]*EndpointSlices{},
+		externalEndpoints:      map[ServiceID]externalEndpoints{},
+		endpointsChangeTracker: NewEndpointsChangeTracker(),
+		Events:                 make(chan ServiceEvent, option.Config.K8sServiceCacheSize),
+		nodeAddressing:         nodeAddressing,
 	}
 }
 
@@ -362,6 +370,7 @@ func (s *ServiceCache) UpdateEndpoints(newEndpoints *Endpoints, swg *lock.Stoppa
 	defer s.mutex.Unlock()
 
 	esID := newEndpoints.EndpointSliceID
+	triggerTime := s.endpointsChangeTracker.EndpointUpdate(esID.ServiceID, newEndpoints.Annotations, false)
 
 	var oldEPs *Endpoints
 	eps, ok := s.endpoints[esID.ServiceID]
@@ -381,17 +390,15 @@ func (s *ServiceCache) UpdateEndpoints(newEndpoints *Endpoints, swg *lock.Stoppa
 	svc, ok := s.services[esID.ServiceID]
 	endpoints, serviceReady := s.correlateEndpoints(esID.ServiceID)
 	if ok && serviceReady {
-		// copy object metadata to new correlated endpoints
-		endpoints.ObjectMeta = newEndpoints.ObjectMeta
-
 		swg.Add()
 		s.Events <- ServiceEvent{
-			Action:       UpdateService,
-			ID:           esID.ServiceID,
-			Service:      svc,
-			Endpoints:    endpoints,
-			OldEndpoints: oldEPs,
-			SWG:          swg,
+			Action:                        UpdateService,
+			ID:                            esID.ServiceID,
+			Service:                       svc,
+			Endpoints:                     endpoints,
+			EndpointLastChangeTriggerTime: triggerTime,
+			OldEndpoints:                  oldEPs,
+			SWG:                           swg,
 		}
 	}
 
@@ -414,6 +421,13 @@ func (s *ServiceCache) DeleteEndpoints(svcID EndpointSliceID, swg *lock.Stoppabl
 			delete(s.endpoints, svcID.ServiceID)
 		}
 	}
+
+	// Delete the endpoint change tracker if it is not shared and has no endpoints
+	_, ok = s.endpoints[svcID.ServiceID]
+	if !ok {
+		s.endpointsChangeTracker.EndpointUpdate(svcID.ServiceID, nil, true)
+	}
+
 	endpoints, _ := s.correlateEndpoints(svcID.ServiceID)
 
 	if serviceOK {
