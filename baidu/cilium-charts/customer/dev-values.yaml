@@ -1,6 +1,8 @@
 global:
   image:
     repository: "registry.baidubce.com/cce-plugin-dev/cilium"
+cce:
+  enabled: true
 
 prometheus:
   enabled: true
@@ -15,6 +17,7 @@ certgen:
     tag: "v0.1.13"
     useDigest: false
 hubble:
+  enabled: false
   relay:
     image:
       repository: "registry.baidubce.com/cce-plugin-dev/cilium/hubble-relay"
@@ -100,6 +103,14 @@ ipam:
     clusterPoolIPv6MaskSize: 120
     # -- IP pools to auto-create in multi-pool IPAM mode.
     autoCreateCiliumPodIPPools: {}
+hostFirewall:
+  # -- Enables the enforcement of host policies in the eBPF datapath.
+  enabled: true
+# 开启 socket LB
+socketLB:
+  enabled: true
+  # Disable socket lb for non-root ns. This is used to enable Istio routing rules.
+  hostNamespaceOnly: false
 nodePort:
   # -- Enable the Cilium NodePort service implementation.
   enabled: true
@@ -121,7 +132,7 @@ endpointRoutes:
   enabled: true
 bpf:
   hostLegacyRouting: false
-  # masquerade: false
+  masquerade: true
 
 # health
 endpointHealthChecking:
@@ -130,9 +141,10 @@ endpointHealthChecking:
 
 cni:
   # -- Install the CNI configuration and binary files into the filesystem.
-  install: false
+  install: true
   chainingMode: generic-veth
   exclusive: false
+  customConf: true
   enableLocalNodeRoute: true
 extraConfig:
   local-router-ipv4: 169.254.169.244
