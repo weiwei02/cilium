@@ -59,13 +59,11 @@ var (
 					},
 				)
 			},
-			func(lc cell.Lifecycle, cs client.Clientset) (LocalCiliumNodeResource, error) {
-				return k8s.CiliumNodeResource(
-					lc, cs,
-					func(opts *metav1.ListOptions) {
-						opts.FieldSelector = fields.ParseSelectorOrDie("metadata.name=" + nodeTypes.GetName()).String()
-					},
-				)
+			func(params k8s.ResourceParam) (LocalCiliumNodeResource, error) {
+				params.Opts = []func(*metav1.ListOptions){func(opts *metav1.ListOptions) {
+					opts.FieldSelector = fields.ParseSelectorOrDie("metadata.name=" + nodeTypes.GetName()).String()
+				}}
+				return k8s.CiliumNodeResource(params)
 			},
 			func(lc cell.Lifecycle, cs client.Clientset) (LocalPodResource, error) {
 				return k8s.PodResource(

@@ -9,7 +9,7 @@ prometheus:
   port: 9962
 image:
   repository: "registry.baidubce.com/cce-plugin-dev/cilium/cilium"
-  tag: "1.15.6-baidu-2407294"
+  tag: "1.15.6-baidu-2408065"
   useDigest: false
 certgen:
   image:
@@ -153,3 +153,4 @@ cni:
 extraConfig:
   local-router-ipv4: 169.254.169.244
   k8s-sync-timeout: 30m
+  k8s-list-timeout-seconds: "300"

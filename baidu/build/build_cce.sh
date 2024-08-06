@@ -11,7 +11,7 @@ export DOCKER_IMAGE_TAG=$(cat VERSION)
 make dev-docker-image
 dev_image=${DOCKER_REGISTRY}/cilium/cilium-dev:${DOCKER_IMAGE_TAG}
 cilium_image=${DOCKER_REGISTRY}/cilium/cilium:${DOCKER_IMAGE_TAG}
-docker tag ${dev_image} 
+docker tag ${dev_image} ${cilium_image}
 docker push ${cilium_image}
 # 构建 operator 镜像
 # make docker-operator-generic-image
