@@ -68,7 +68,11 @@ clustermesh:
 kubeConfigPath: "/etc/kubernetes/kube-proxy.conf"
 l7Proxy: false
 kubeProxyReplacement: "true"
-
+# -- Cilium agent update strategy
+updateStrategy:
+  type: RollingUpdate
+  rollingUpdate:
+    maxUnavailable: 10%
 operator:
   # -- Enable the cilium-operator component (required).
   enabled: true
@@ -103,6 +107,11 @@ ipam:
     clusterPoolIPv6MaskSize: 120
     # -- IP pools to auto-create in multi-pool IPAM mode.
     autoCreateCiliumPodIPPools: {}
+
+# 单机配置
+endpointHealthChecking:
+  # -- Enable connectivity health checking between virtual endpoints.
+  enabled: true
 hostFirewall:
   # -- Enables the enforcement of host policies in the eBPF datapath.
   enabled: true
@@ -134,11 +143,6 @@ bpf:
   hostLegacyRouting: false
   masquerade: true
 
-# health
-endpointHealthChecking:
-  # -- Enable connectivity health checking between virtual endpoints.
-  enabled: false
-
 cni:
   # -- Install the CNI configuration and binary files into the filesystem.
   install: true
@@ -148,3 +152,4 @@ cni:
   enableLocalNodeRoute: true
 extraConfig:
   local-router-ipv4: 169.254.169.244
+  k8s-sync-timeout: 30m

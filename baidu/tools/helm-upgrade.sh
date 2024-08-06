@@ -42,10 +42,13 @@ for resource in "${resources[@]}"; do
   echo "update $resource success"
 done
 
-
-kubectl -n kube-system delete daemonset cilium 
-kubectl -n kube-system delete deployment cilium-operator
-
 # 执行安装脚本
 # 例如 tools/operating/helm-upgrade.sh output/z85m1xdk/node-ready-values-z85m1xdk.yaml
 helm upgrade -n kube-system --install cilium baidu/cilium-charts -f $1 
+
+if [ $? -ne 0 ]; then
+  echo "helm exit with code $?"
+  kubectl -n kube-system delete daemonset cilium 
+  kubectl -n kube-system delete deployment cilium-operator
+  helm upgrade -n kube-system --install cilium baidu/cilium-charts -f $1 
+fi
