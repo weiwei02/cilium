@@ -30,6 +30,7 @@ var (
 		"Agent Kubernetes resources",
 
 		cell.Config(k8s.DefaultConfig),
+		cell.Provide(k8s.SetListTimeout),
 		LocalNodeCell,
 		cell.Provide(
 			k8s.ServiceResource,

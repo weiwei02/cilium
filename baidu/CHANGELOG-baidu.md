@@ -1,4 +1,7 @@
 # 1.15
+## 1.15.6-baidu-240806
+1. [Optimize] cilium-agent 支持启动超时配置，避免在大集群下由于资源过多导致无法启动的问题
+2. [Optimize] cilium-agent k8s-resources 模块支持`k8s-list-timeout-seconds`参数自定义LIST 超时时间，默认 60s
 ## 1.15.6-baidu-2407294
 1. [Feature] 新增网络编程延迟度量，支持 cilium 主动暴漏网络编程延迟
 2. [Feature] 支持 datapath v2 Pod 网络加速

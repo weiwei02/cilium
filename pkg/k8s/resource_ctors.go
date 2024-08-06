@@ -39,6 +39,9 @@ type Config struct {
 	// the label is not present. For more details -
 	// https://github.com/kubernetes/enhancements/tree/master/keps/sig-network/2447-Make-kube-proxy-service-abstraction-optional
 	K8sServiceProxyName string
+
+	// K8sListTimeoutSeconds is the timeout for listing resources from k8s.
+	K8sListTimeoutSeconds *int64
 }
 
 // DefaultConfig represents the default k8s resources config values.
@@ -50,6 +53,13 @@ var DefaultConfig = Config{
 func (def Config) Flags(flags *pflag.FlagSet) {
 	flags.Bool("enable-k8s-endpoint-slice", def.EnableK8sEndpointSlice, "Enables k8s EndpointSlice feature in Cilium if the k8s cluster supports it")
 	flags.String("k8s-service-proxy-name", def.K8sServiceProxyName, "Value of K8s service-proxy-name label for which Cilium handles the services (empty = all services without service.kubernetes.io/service-proxy-name label)")
+	flags.Int64Var(def.K8sListTimeoutSeconds, "k8s-list-timeout-seconds", 60, "The maximum duration to wait before giving up on a list operation")
+}
+
+func SetListTimeout(def Config) func(opts *metav1.ListOptions) {
+	return func(opts *metav1.ListOptions) {
+		opts.TimeoutSeconds = def.K8sListTimeoutSeconds
+	}
 }
 
 // ServiceResource builds the Resource[Service] object.
